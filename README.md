@@ -63,7 +63,9 @@ subdomain `ibgod`, domain `n-ved.com`, service `HTTP`, URL `caddy:80`.
 | AI model                      | `models/Qwen3.5-4B-Q4_K_M.gguf` (2.7 GB)| sha256 `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4` |
 | Study material                | `/mnt/files/docs`                       | mounted read-only; the app cannot change it        |
 
-Backup while running: `sqlite3 data/ibgod.db ".backup '/opt/backups/ibgod.db'"` (or copy the file with the stack stopped).
+The app writes a small daily snapshot of everything students created (not the index) to `data/backups/students-YYYYMMDD.sqlite`
+and keeps the newest 14. They are on the same disk as the database, so copy that folder somewhere else now and then.
+To restore: stop the stack, open `data/ibgod.db` with `sqlite3`, `ATTACH` the snapshot and copy the tables back.
 The library index is derived data: if the database is lost, students' plans are lost but the index rebuilds itself
 (about 45 minutes).
 
@@ -155,3 +157,6 @@ sudo sh deploy/go-live.sh rollback       # take it out of Caddy and Authelia
 docker compose down                      # stop the containers
 ```
 Then delete the Cloudflare public hostname and, if wanted, this folder.
+
+Note for the fileserver stack: `ibgod` is attached to its `fileserver_apps` network. `docker compose down` in `/opt/fileserver`
+will therefore report that this one network is still in use; that is harmless (stop IB God first if you want it removed).

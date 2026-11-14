@@ -100,6 +100,7 @@ else
     { print }
     /^[[:space:]]*-[[:space:]]*.view\.n-ved\.com.[[:space:]]*$/ && !done { line = $0; sub(/view\.n-ved\.com/, host, line); print line; done = 1 }
     END { if (!done) exit 3 }' "$AUTHELIA_CFG" > "$TMP" || { rm -f "$TMP"; die "could not find the view.n-ved.com rule in the Authelia config; Authelia left unchanged (Caddy change is harmless: the new site just answers 403 until Authelia allows it)"; }
+  chmod 644 "$TMP"                                          # no secrets in it; the validator runs as uid 8000
   # Validate the new file with the same image and secrets before touching the running service.
   if ! docker run --rm --network none --user 8000:8000 \
         -e AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE=/secrets/authelia_jwt_secret -e AUTHELIA_SESSION_SECRET_FILE=/secrets/authelia_session_secret \

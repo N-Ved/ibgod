@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import advice, auth, catalog, coach, config, db, feedback, indexer, llm, planner, search
+from . import advice, auth, backup, catalog, coach, config, db, feedback, indexer, llm, planner, search
 from .auth import User, current_user
 from .knowledge import FAMILY_TIPS, GRADE_BANDS, RUBRICS, TECHNIQUES
 
@@ -51,6 +51,7 @@ async def lifespan(_: FastAPI):
         indexer.start()
     if config.FEEDBACK_WORKER:
         feedback.start()
+        backup.start()
     yield
     indexer.stop()
 
