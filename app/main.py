@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import tempfile
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
@@ -35,10 +36,21 @@ INLINE_TYPES = {"pdf": "application/pdf", "mp4": "video/mp4", "webm": "video/web
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    os.umask(0o077)  # database, WAL and temp files are readable by this service account only
+    if config.DEV_USER:
+        if auth._resolve_proxies(force=True):
+            raise RuntimeError("IBGOD_DEV_USER must never be set on a network where the reverse proxy is reachable")
+        log.warning("DEVELOPMENT MODE: every request is treated as user %r. Never use this behind the public proxy.", config.DEV_USER)
     db.init()
+    for path in (config.DATA_DIR, config.DB_PATH):
+        try:
+            os.chmod(path, 0o700 if path.is_dir() else 0o600)
+        except OSError:
+            pass
     if config.AUTO_INDEX:
         indexer.start()
-    feedback.start()
+    if config.FEEDBACK_WORKER:
+        feedback.start()
     yield
     indexer.stop()
 
@@ -841,6 +853,11 @@ def delete_chat(cid: int, user: User = Depends(current_user)):
     return {"ok": True}
 
 
+_coach_active: dict[str, float] = {}
+_coach_lock = threading.Lock()
+COACH_MAX_WAITING = 6
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -850,19 +867,42 @@ def post_message(cid: int, body: ChatIn, user: User = Depends(current_user)):
     question = _clean_text(body.message, 2000) or ""
     if not question:
         raise HTTPException(422, "Empty message")
-    auth.rate_limit(user.username, "coach", config.RATE_COACH_PER_HOUR, 3600)
-    with db.tx() as con:
-        c = _chat(con, user.username, cid)
-        history = db.rows(con, "SELECT role, content FROM chat_messages WHERE chat_id=? ORDER BY id DESC LIMIT 6", (cid,))[::-1]
-        messages, sources = coach.build(con, user.username, question, history)
-        con.execute("INSERT INTO chat_messages(chat_id, role, content, sources, created_at) VALUES(?,?,?,?,?)", (cid, "user", question, "[]", now_iso()))
-        if c["title"] == "New conversation":
-            con.execute("UPDATE chats SET title=? WHERE id=?", (question[:60], cid))
-        con.execute("UPDATE chats SET updated_at=? WHERE id=?", (now_iso(), cid))
+    with db.ro() as con:
+        _chat(con, user.username, cid)
+    with _coach_lock:
+        now = time.time()
+        if now - _coach_active.get(user.username, 0) < 900:
+            raise HTTPException(429, "Your previous question is still being answered. Wait for it to finish.")
+        if llm.info()["waiting"] >= COACH_MAX_WAITING and not coach.is_crisis(question):
+            raise HTTPException(429, "The coach is very busy right now. Please try again in a few minutes.")
+        _coach_active[user.username] = now
+    try:
+        auth.rate_limit(user.username, "coach", config.RATE_COACH_PER_HOUR, 3600)
+    except HTTPException:
+        _coach_active.pop(user.username, None)
+        raise
+    try:
+        with db.tx() as con:
+            c = _chat(con, user.username, cid)
+            history = db.rows(con, "SELECT role, content FROM chat_messages WHERE chat_id=? ORDER BY id DESC LIMIT 6", (cid,))[::-1]
+            messages, sources = coach.build(con, user.username, question, history)
+            con.execute("INSERT INTO chat_messages(chat_id, role, content, sources, created_at) VALUES(?,?,?,?,?)", (cid, "user", question, "[]", now_iso()))
+            if c["title"] == "New conversation":
+                con.execute("UPDATE chats SET title=? WHERE id=?", (question[:60], cid))
+            con.execute("UPDATE chats SET updated_at=? WHERE id=?", (now_iso(), cid))
+    except Exception:
+        _coach_active.pop(user.username, None)
+        raise
 
     def gen():
         parts: list[str] = []
         try:
+            if coach.is_crisis(question):
+                parts.append(coach.CRISIS_REPLY)
+                yield _sse("sources", {"sources": []})
+                yield _sse("token", {"text": coach.CRISIS_REPLY})
+                yield _sse("done", {"fixed": True})
+                return
             yield _sse("sources", {"sources": sources})
             if not llm.available():
                 text = coach.fallback_answer(question, sources)
@@ -870,13 +910,17 @@ def post_message(cid: int, body: ChatIn, user: User = Depends(current_user)):
                 yield _sse("token", {"text": text})
                 yield _sse("done", {"fallback": True})
                 return
-            for ev in llm.stream(messages, max_tokens=520, temperature=0.4):
+            for ev in llm.stream(messages, max_tokens=640, temperature=0.4):
                 if "wait" in ev:
                     yield _sse("wait", {"ahead": max(0, ev["wait"] - 1)})
                 elif "text" in ev:
                     parts.append(ev["text"])
                     yield _sse("token", {"text": ev["text"]})
                 elif "done" in ev:
+                    if ev["done"].get("finish") == "length":
+                        tail = "\n\n(I stopped here to keep this short. Say \"continue\" if you want the rest.)"
+                        parts.append(tail)
+                        yield _sse("token", {"text": tail})
                     yield _sse("done", ev["done"])
         except llm.Busy:
             yield _sse("error", {"detail": "The AI is busy with other requests. Please try again in a few minutes."})
@@ -890,10 +934,12 @@ def post_message(cid: int, body: ChatIn, user: User = Depends(current_user)):
                 yield _sse("token", {"text": text})
             yield _sse("done", {"fallback": True})
         finally:
+            _coach_active.pop(user.username, None)
             text = "".join(parts).strip()
             if text:
+                shown = [] if coach.is_crisis(question) else sources
                 with db.tx() as con2:
-                    con2.execute("INSERT INTO chat_messages(chat_id, role, content, sources, created_at) VALUES(?,?,?,?,?)", (cid, "assistant", text[:12000], json.dumps(sources), now_iso()))
+                    con2.execute("INSERT INTO chat_messages(chat_id, role, content, sources, created_at) VALUES(?,?,?,?,?)", (cid, "assistant", text[:12000], json.dumps(shown), now_iso()))
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
@@ -923,7 +969,7 @@ async def extract_upload(file: UploadFile = File(...), user: User = Depends(curr
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         from starlette.concurrency import run_in_threadpool
-        rows, _ = await run_in_threadpool(indexer.extract_text, Path(tmp), ext, "upload")
+        text = await run_in_threadpool(indexer.extract_document, Path(tmp), ext)
     except Exception:
         raise HTTPException(422, "Could not read text from this file. Try pasting the text instead.")
     finally:
@@ -931,7 +977,6 @@ async def extract_upload(file: UploadFile = File(...), user: User = Depends(curr
             os.unlink(tmp)
         except OSError:
             pass
-    text = "\n\n".join(t for _, t in rows)
     if len(text.strip()) < 50:
         raise HTTPException(422, "No text found. If this is a scanned document, paste the text instead.")
     return {"text": text[:200000], "words": feedback.word_count(text)}
@@ -965,6 +1010,9 @@ def create_feedback(body: FeedbackIn, user: User = Depends(current_user)):
     if active >= 2:
         raise HTTPException(429, "You already have feedback in progress. Wait for it to finish first.")
     auth.rate_limit(user.username, "feedback", config.RATE_FEEDBACK_PER_DAY, 86400)
+    with db.tx() as con:
+        con.execute("DELETE FROM feedback_jobs WHERE username=? AND status IN ('done','error') AND id NOT IN (SELECT id FROM feedback_jobs WHERE username=? ORDER BY id DESC LIMIT 40)",
+                    (user.username, user.username))
     jid = feedback.create_job(user.username, body.rubric, body.subject if body.subject and SUBJECT_KEY.match(body.subject) else None, _clean_text(body.title, 160) or "Untitled", text)
     return {"id": jid}
 

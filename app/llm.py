@@ -93,6 +93,7 @@ def stream(messages: list[dict], max_tokens: int = 500, temperature: float = 0.4
     try:
         started = time.time()
         n = 0
+        finish = None
         with httpx.stream("POST", config.LLM_URL + "/v1/chat/completions", json=_body(messages, max_tokens, temperature, True, None),
                           timeout=httpx.Timeout(connect=5, read=600, write=30, pool=5)) as r:
             r.raise_for_status()
@@ -106,11 +107,13 @@ def stream(messages: list[dict], max_tokens: int = 500, temperature: float = 0.4
                     obj = json.loads(data)
                 except ValueError:
                     continue
-                delta = ((obj.get("choices") or [{}])[0].get("delta") or {}).get("content")
+                choice = (obj.get("choices") or [{}])[0]
+                finish = choice.get("finish_reason") or finish
+                delta = (choice.get("delta") or {}).get("content")
                 if delta:
                     n += 1
                     yield {"text": delta}
-        yield {"done": {"seconds": round(time.time() - started, 1), "pieces": n}}
+        yield {"done": {"seconds": round(time.time() - started, 1), "pieces": n, "finish": finish}}
     finally:
         _lock.release()
 

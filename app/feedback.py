@@ -20,17 +20,17 @@ _thread: threading.Thread | None = None
 SCHEMA = {
     "type": "object",
     "properties": {
-        "level": {"type": "string", "enum": ["emerging", "developing", "secure", "strong"]},
-        "strengths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3},
-        "improvements": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 4},
-        "evidence": {"type": "string"},
+        "strengths": {"type": "array", "items": {"type": "string", "maxLength": 240}, "minItems": 0, "maxItems": 3},
+        "improvements": {"type": "array", "items": {"type": "string", "maxLength": 300}, "minItems": 1, "maxItems": 3},
+        "evidence": {"type": "string", "maxLength": 220},
     },
-    "required": ["level", "strengths", "improvements", "evidence"],
+    "required": ["strengths", "improvements", "evidence"],
     "additionalProperties": False,
 }
 SYSTEM = """You are an experienced IB Diploma examiner giving formative feedback on a student's draft. Judge only what is on the page.
 Be specific: refer to what the student actually wrote. Every improvement must be an action the student can take, never a rewritten sentence or paragraph.
-Do not award marks. Do not praise vaguely. Write to the student as "you"."""
+A strength is something that genuinely earns credit under the criterion. Do not list a weakness, a bare claim or mere presence of a section as a strength; if nothing earns credit, give no strengths.
+Do not award marks, bands or grades. Write to the student as "you"."""
 
 _WORDS = re.compile(r"\b[\w'’-]+\b", re.UNICODE)
 _SENT = re.compile(r"[.!?]+[\s\n]+")
@@ -61,9 +61,9 @@ def structural_checks(text: str, rubric_key: str) -> list[dict]:
     else:
         add("info", "Length", f"About {n:,} words.")
     paras = [p for p in re.split(r"\n\s*\n", text) if len(p.split()) > 5]
-    if paras:
+    if len(paras) >= 5 and sorted(len(p.split()) for p in paras)[len(paras) // 2] < 220:
         longest = max(len(p.split()) for p in paras)
-        if longest > 350:
+        if longest > 450:
             add("warn", "Very long paragraph", f"One paragraph runs to about {longest} words. Split it so each paragraph makes one point.")
     sents = [s for s in _SENT.split(text) if len(s.split()) > 2]
     if sents:
@@ -91,7 +91,9 @@ def structural_checks(text: str, rubric_key: str) -> list[dict]:
                                  ("variable", "Variables", "Name the independent, dependent and controlled variables and how each is controlled."),
                                  ("safety", "Safety / ethics / environment", "Address safety, ethical and environmental considerations, even if only to say none apply."),
                                  ("limitation", "Limitations", "Evaluate specific weaknesses of the method and their likely effect on the results.")):
-            if word not in low and not (word == "safety" and ("ethic" in low or "risk" in low)):
+            alt = {"safety": ("ethic", "risk", "hazard"), "limitation": ("weakness", "source of error", "sources of error", "systematic error", "random error", "improve"),
+                   "uncertaint": ("±", "error bar", "percentage error")}.get(word, ())
+            if word not in low and not any(a in low for a in alt):
                 add("warn", f"{label} not mentioned", tip)
     if rubric_key == "math_ia":
         if "aim" not in low and "objective" not in low:
@@ -107,6 +109,26 @@ def structural_checks(text: str, rubric_key: str) -> list[dict]:
     if rubric_key in ("math_ia",) and first_person == 0:
         add("info", "Personal voice", "No first-person statements found. Personal engagement is assessed: explain your own choices and reasoning.")
     return out
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _verified_quote(quote: str, body: str) -> str:
+    """Keep the model's 'evidence' only when it really is a phrase from the student's work."""
+    q = _norm(quote.strip(" \"'“”‘’…."))
+    if len(q) < 12:
+        return ""
+    hay = _norm(body)
+    if q in hay:
+        return quote.strip()[:300]
+    # Models often stitch two fragments with an ellipsis: accept when a long opening run is genuine.
+    words = q.split()
+    for n in range(min(len(words), 14), 5, -1):
+        if " ".join(words[:n]) in hay:
+            return " ".join(quote.split()[:n]).strip() + "…"
+    return ""
 
 
 def create_job(username: str, rubric: str, subject: str | None, title: str, body: str) -> int:
@@ -146,15 +168,24 @@ def _process(job: dict) -> None:
     for i, (code, name, marks, descriptor) in enumerate(crits, start=1):
         _set(job["id"], status="running", progress=f"Criterion {i} of {len(crits)}: {name}")
         ask = (f"Give feedback on this work for ONE criterion only.\nCriterion {code}: {name}" + (f" ({marks} marks available)" if marks else "") +
-               f"\nWhat the top band requires: {descriptor}\n\nReturn JSON with: level (how well the work meets the top band: emerging, developing, secure or strong), "
-               "strengths (1-3 specific things done well for this criterion), improvements (1-4 specific actions to move up a band), "
-               "evidence (one short phrase quoted from the work that best illustrates your judgement).")
+               f"\nWhat the top band requires: {descriptor}\n\nReturn JSON with: "
+               "strengths (0-3 specific things that genuinely earn credit for this criterion), improvements (1-3 specific actions that would strengthen the work for this criterion), "
+               "evidence (one short phrase copied word for word from the work that best illustrates your main point).")
         try:
-            raw = llm.complete([{"role": "system", "content": SYSTEM}, {"role": "user", "content": prefix + ask}], max_tokens=420, temperature=0.2, schema=SCHEMA)
-            data = json.loads(raw)
-            result["criteria"].append({"code": code, "name": name, "marks": marks, "descriptor": descriptor, "level": data.get("level"),
-                                       "strengths": [str(x)[:400] for x in data.get("strengths", [])][:3], "improvements": [str(x)[:500] for x in data.get("improvements", [])][:4],
-                                       "evidence": str(data.get("evidence", ""))[:300]})
+            data = None
+            for budget in (520, 760):  # a reply cut off mid-JSON is retried once with more room
+                raw = llm.complete([{"role": "system", "content": SYSTEM}, {"role": "user", "content": prefix + ask}], max_tokens=budget, temperature=0.2, schema=SCHEMA)
+                try:
+                    data = json.loads(raw)
+                    break
+                except ValueError:
+                    continue
+            if data is None:
+                raise ValueError("model reply was not valid JSON")
+            result["criteria"].append({"code": code, "name": name, "marks": marks, "descriptor": descriptor,
+                                       "strengths": [str(x)[:400] for x in data.get("strengths", []) if str(x).strip()][:3],
+                                       "improvements": [str(x)[:500] for x in data.get("improvements", []) if str(x).strip()][:3],
+                                       "evidence": _verified_quote(str(data.get("evidence", "")), job["body"])})
             result["ai"] = True
         except Exception as e:
             log.warning("feedback criterion failed: %r", e)
@@ -162,7 +193,7 @@ def _process(job: dict) -> None:
     good = [c for c in result["criteria"] if "error" not in c]
     if good:
         _set(job["id"], progress="Summarising priorities")
-        digest = "\n".join(f"{c['name']} [{c['level']}]: " + "; ".join(c["improvements"]) for c in good)
+        digest = "\n".join(f"{c['name']}: " + "; ".join(c["improvements"]) for c in good)
         try:
             raw = llm.complete([{"role": "system", "content": SYSTEM},
                                 {"role": "user", "content": f"Here are improvement notes per criterion for a {rub['name']} draft:\n{digest}\n\nReturn JSON: priorities = the three most valuable actions, most important first, each one sentence."}],

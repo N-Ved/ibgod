@@ -80,6 +80,28 @@ def extract_pdf(path: Path) -> list[tuple[int, str]]:
     return out
 
 
+def extract_document(path: Path, ext: str) -> str:
+    """Text of a student's own upload with paragraphs preserved (the library index does not need them, feedback does)."""
+    if ext == "pdf":
+        proc = subprocess.run(["pdftotext", "-enc", "UTF-8", "-q", "-l", "400", str(path), "-"], capture_output=True, timeout=120, preexec_fn=_low_priority, check=False)
+        if proc.returncode != 0 and not proc.stdout:
+            raise RuntimeError("pdftotext failed")
+        raw = proc.stdout.decode("utf-8", "replace").replace("\x00", " ").replace("\f", "\n\n")
+    elif ext == "docx":
+        with zipfile.ZipFile(path) as z:
+            info = z.getinfo("word/document.xml")
+            if info.file_size > 30_000_000:
+                raise RuntimeError("document too large")
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+        xml = re.sub(r"<w:tab/>", " ", re.sub(r"</w:p>", "\n\n", xml))
+        raw = html.unescape(_TAG.sub("", xml))
+    else:
+        with open(path, "rb") as f:
+            raw = f.read(2_000_000).decode("utf-8", "replace")
+    paras = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"\n\s*\n", raw.replace("\r", ""))]
+    return "\n\n".join(p for p in paras if p)
+
+
 def _zip_xml_texts(path: Path, pattern: str, limit: int = 400) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     with zipfile.ZipFile(path) as z:

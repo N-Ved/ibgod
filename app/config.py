@@ -37,6 +37,7 @@ LLM_ENABLED = os.environ.get("IBGOD_LLM_ENABLED", "1") == "1"
 
 INDEX_WORKERS = int(os.environ.get("IBGOD_INDEX_WORKERS", "2"))
 AUTO_INDEX = os.environ.get("IBGOD_AUTO_INDEX", "1") == "1"
+FEEDBACK_WORKER = os.environ.get("IBGOD_FEEDBACK_WORKER", "1") == "1"  # off only for a second test instance sharing the database
 MAX_UPLOAD_BYTES = int(os.environ.get("IBGOD_MAX_UPLOAD_MB", "20")) * 1024 * 1024
 MAX_FEEDBACK_WORDS = int(os.environ.get("IBGOD_MAX_FEEDBACK_WORDS", "6500"))
 

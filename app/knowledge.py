@@ -326,5 +326,6 @@ RUBRICS: dict[str, dict] = {
             ("4", "Language and referencing", 0, "Precise, formal language; consistent citations.")]),
 }
 
-ACADEMIC_INTEGRITY_NOTE = ("This feedback is formative guidance generated on this server by a small AI model. It can be wrong, it is not a predicted mark, and it does not replace your teacher. "
+ACADEMIC_INTEGRITY_NOTE = ("This feedback is formative guidance generated on this server by a small AI model. It reads only the text: graphs, tables, images and equations in your file are invisible to it. "
+                           "It cannot grade: in our tests it could not tell a top-mark essay from a weak one, so it gives no marks or bands, only comments. It can be wrong and does not replace your teacher. "
                            "It will not rewrite your work: under IB academic integrity rules the work you submit must be your own.")

@@ -148,7 +148,8 @@ def passages(con: sqlite3.Connection, q: str, subject_tags: list[str] | None, co
         tagq += "ctag:(" + " OR ".join(catalog.ctag(c) for c in collections) + ") AND "
     try:
         rows = db.rows(con, f"""SELECT {RES_COLS}, c.page AS page, c.text AS text, c.rank AS score FROM chunks c JOIN resources r ON r.id=c.resource_id
-                                WHERE chunks MATCH ? AND (r.lang IS NULL OR r.lang='en') ORDER BY c.rank LIMIT ?""", (f"{tagq}text:({expr})", limit * 5))
+                                WHERE chunks MATCH ? AND (r.lang IS NULL OR r.lang='en') AND COALESCE(r.syllabus,'current')='current'
+                                ORDER BY c.rank LIMIT ?""", (f"{tagq}text:({expr})", limit * 5))
     except sqlite3.OperationalError:
         return []
     out, seen = [], set()

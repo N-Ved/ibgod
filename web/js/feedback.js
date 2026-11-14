@@ -1,7 +1,6 @@
 // Feedback writer: criterion-by-criterion formative feedback on IAs, the EE and TOK work.
 import { html, useState, useEffect, useRef, api, useStore, useLoad, attempt, toast, Icon, Spinner, ErrorBox, fmtDate, go } from './core.js';
 
-const LEVEL = { emerging: ['danger', 'Emerging'], developing: ['warn', 'Developing'], secure: ['info', 'Secure'], strong: ['ok', 'Strong'] };
 const CHECK = { ok: ['ok', 'check'], warn: ['warn', 'alert'], info: ['info', 'bulb'] };
 
 function countWords(t) { const m = t.match(/[\p{L}\p{N}'’-]+/gu); return m ? m.length : 0; }
@@ -40,15 +39,15 @@ function Result({ jobId }) {
       ${r.priorities && r.priorities.length ? html`<div class="card hero"><div class="card-title"><${Icon} name="target" /><h2>Do these first</h2></div><ol>${r.priorities.map((p) => html`<li>${p}</li>`)}</ol></div>` : null}
       <div class="card"><div class="card-title"><h2>Automatic checks</h2></div>
         <div class="stack tight">${r.checks.map((c, i) => { const [tone, icon] = CHECK[c.status] || CHECK.info; return html`<div class="row top" key=${i}><span class=${'chip ' + tone}><${Icon} name=${icon} size=${13} /></span><div><strong>${c.title}</strong><div class="small muted">${c.detail}</div></div></div>`; })}</div></div>
-      ${r.criteria.map((c) => { const [tone, label] = LEVEL[c.level] || ['', '']; return html`<div class="card" key=${c.code}>
-        <div class="card-title"><h2 class="grow">${c.code.length <= 3 ? `Criterion ${c.code}: ` : ''}${c.name}</h2>${c.marks ? html`<span class="chip">${c.marks} marks</span>` : null}${c.level ? html`<span class=${'chip ' + tone}>${label}</span>` : null}</div>
+      ${r.criteria.map((c) => html`<div class="card" key=${c.code}>
+        <div class="card-title"><h2 class="grow">${c.code.length <= 3 ? `Criterion ${c.code}: ` : ''}${c.name}</h2>${c.marks ? html`<span class="chip">${c.marks} marks available</span>` : null}</div>
         <div class="hint" style=${{ marginBottom: '8px' }}>Top band: ${c.descriptor}</div>
         ${c.error ? html`<div class="banner warn">${c.error}</div>` : html`<div class="grid two">
-          <div><div class="section-label">What is working</div><ul>${c.strengths.map((s) => html`<li>${s}</li>`)}</ul></div>
-          <div><div class="section-label">To move up a band</div><ul>${c.improvements.map((s) => html`<li>${s}</li>`)}</ul></div></div>
-          ${c.evidence ? html`<div class="quote small" style=${{ marginTop: '8px' }}>“${c.evidence}”</div>` : null}`}
-      </div>`; })}
-      ${r.ai ? html`<div class="hint">The band words (emerging, developing, secure, strong) describe how close the draft is to the top band for that criterion. They are not marks.</div>` : null}
+          <div><div class="section-label">What is working</div>${c.strengths.length ? html`<ul>${c.strengths.map((s) => html`<li>${s}</li>`)}</ul>` : html`<div class="hint">Nothing clearly earns credit here yet.</div>`}</div>
+          <div><div class="section-label">Ways to strengthen it</div><ul>${c.improvements.map((s) => html`<li>${s}</li>`)}</ul></div></div>
+          ${c.evidence ? html`<div class="quote small" style=${{ marginTop: '8px' }}>From your work: “${c.evidence}”</div>` : null}`}
+      </div>`)}
+      ${r.ai ? html`<div class="hint">These comments describe what to work on. They are not marks, and a strong draft will still get suggestions.</div>` : null}
       <div class="banner"><${Icon} name="alert" /><div class="small">${r.note}</div></div>` : null}
     <button class="btn sm ghost" onClick=${() => setShowText(!showText)}>${showText ? 'Hide' : 'Show'} the text you submitted</button>
     ${showText ? html`<div class="card small" style=${{ whiteSpace: 'pre-wrap' }}>${job.text}</div>` : null}
@@ -123,7 +122,7 @@ function FeedbackHome() {
             <input ref=${file} type="file" accept=".pdf,.docx,.txt" class="hide" onChange=${upload} />
             <button class="btn sm" disabled=${uploading} onClick=${() => file.current.click()}>${uploading ? html`<span class="spinner"></span> Reading…` : html`<${Icon} name="upload" size=${15} /> Upload PDF, DOCX or TXT`}</button></div></div>
         <button class="btn primary" disabled=${busy || words < 80} onClick=${submit}>${busy ? html`<span class="spinner"></span> Submitting…` : 'Get feedback'}</button>
-        <div class="hint">Your text stays on this server, is visible only to you, and you can delete it at any time. Up to ${meta.per_day} submissions a day. This tool gives guidance; it never rewrites your work, which must remain your own under IB academic integrity rules.</div>
+        <div class="hint">The AI reads text only: it cannot see graphs, tables, images or equations, so describe key results in words. Your text stays on this server, is visible only to you, and you can delete it at any time. Up to ${meta.per_day} submissions a day. This tool gives guidance; it never rewrites your work, which must remain your own under IB academic integrity rules.</div>
       </div>
       <div class="stack">
         ${rub ? html`<div class="card"><div class="card-title"><h2 class="grow">What examiners look for</h2>${rub.total ? html`<span class="chip">${rub.total} marks</span>` : null}</div>
