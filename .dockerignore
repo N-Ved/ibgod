@@ -1,0 +1,6 @@
+models
+data
+.git
+tests
+deploy
+**/__pycache__
