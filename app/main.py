@@ -188,8 +188,8 @@ def textbooks(subject: str, level: str = "HL", user: User = Depends(current_user
     tags = catalog.subject_tags(subject)
     with db.ro() as con:
         rows = db.rows(con, f"""SELECT {search.RES_COLS} FROM resources r WHERE r.subject IN ({','.join('?' * len(tags))}) AND r.collection='books' AND r.kind='textbook'
-                                AND r.ext IN ('pdf','epub') AND (r.level IS NULL OR r.level IN (?, 'HLSL')) AND (r.lang IS NULL OR r.lang='en')
-                                ORDER BY COALESCE(r.syllabus,'current')='current' DESC, COALESCE(r.year,0) DESC, r.title LIMIT 60""", (*tags, level if level in ("HL", "SL") else "HL"))
+                                AND r.ext IN ('pdf','epub') AND (r.level IS NULL OR r.level IN (?, 'HLSL')) AND (r.lang IS NULL OR r.lang='en') AND COALESCE(r.syllabus,'current')='current'
+                                ORDER BY COALESCE(r.year,0) DESC, r.title LIMIT 60""", (*tags, level if level in ("HL", "SL") else "HL"))
     return {"textbooks": [search.public(r) for r in rows]}
 
 

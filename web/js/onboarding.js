@@ -153,7 +153,7 @@ export function Onboarding({ editing }) {
         ${s.subject.startsWith('custom:') ? null : list === undefined ? html`<div class="hint"><span class="spinner"></span> Looking in the library…</div>` : list.length ? html`
           <select class="input" aria-label=${'Textbook for ' + s.name} value=${s.textbook_id || ''} onChange=${(e) => update(s.subject, { textbook_id: e.target.value ? Number(e.target.value) : null })}>
             <option value="">Not sure / none of these</option>
-            ${list.map((b) => html`<option value=${b.id}>${b.title}${b.syllabus === 'legacy' ? ' (older syllabus)' : ''}</option>`)}
+            ${list.map((b) => html`<option value=${b.id}>${b.title}</option>`)}
           </select>` : html`<div class="hint">No textbooks for this subject in the library yet.</div>`}
         <input class="input" placeholder="Using a different book? Type its name (optional)" maxlength="160" value=${s.textbook_other || ''} onInput=${(e) => update(s.subject, { textbook_other: e.target.value })} />
       </div>`; })}
