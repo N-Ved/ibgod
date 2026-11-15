@@ -111,13 +111,15 @@ function TopicRow({ subjectKey, t, done, onChange }) {
 }
 
 function TopicsTab({ d, setData }) {
+  const [dirty, setDirty] = useState(false);
+  const [replanning, setReplanning] = useState(false);
+  const replan = async () => { setReplanning(true); const res = await replanNow(true); setReplanning(false); if (res) setDirty(false); };
   const rated = d.units.flatMap((u) => u.topics).filter((t) => t.enabled && t.confidence).length;
   const total = d.units.flatMap((u) => u.topics).filter((t) => t.enabled).length;
   const patch = (code, body) => {
     setData((cur) => ({ ...cur, units: cur.units.map((u) => ({ ...u, topics: u.topics.map((t) => (t.code !== code ? t : { ...t, ...(body.enabled !== undefined ? { enabled: body.enabled } : {}), ...(body.confidence !== undefined ? { confidence: body.confidence || null } : {}),
       ...(body.coverage !== undefined ? { coverage: body.coverage } : {}), ...(body.custom_name !== undefined ? { name: body.custom_name || t.default_name } : {}) })) })) }));
-    if (body.enabled !== undefined) suggestReplan('Topic list changed. Re-plan to update your schedule.');
-    else if (body.coverage !== undefined) suggestReplan('Checklist updated. Re-plan so covered topics are not taught again.');
+    if (body.enabled !== undefined || body.coverage !== undefined) setDirty(true);
   };
   const all = d.units.flatMap((u) => u.topics).filter((t) => t.enabled);
   const counts = STAGES.map((st) => all.filter((t) => (t.coverage || 0) === st.n).length);
@@ -125,7 +127,7 @@ function TopicsTab({ d, setData }) {
     const res = await attempt(() => api(`/api/subjects/${encodeURIComponent(d.subject.key)}/coverage`, { method: 'PUT', body: { level, unit } }));
     if (!res) return;
     setData((cur) => ({ ...cur, units: cur.units.map((u) => (unit === null || u.code === unit ? { ...u, topics: u.topics.map((t) => (t.enabled ? { ...t, coverage: level } : t)) } : u)) }));
-    suggestReplan('Checklist updated. Re-plan so covered topics are not taught again.');
+    setDirty(true);
   };
   return html`<div class="stack">
     <div class="card stack">
@@ -135,6 +137,7 @@ function TopicsTab({ d, setData }) {
       <div class="hint">Mark how far you have got with each topic. The next re-plan skips what you have already done and puts the time where it is still needed.</div>
       <div class="split">${counts.map((c, i) => html`<i key=${i} class=${'cov-seg cov' + i} style=${{ width: pct(c, all.length) + '%' }} title=${STAGES[i].name + ': ' + c}></i>`)}</div>
       <div class="legend">${STAGES.map((st, i) => html`<span class=${'cov-key cov' + i} key=${st.n}>${st.name} ${counts[i]}</span>`)}</div>
+      ${dirty ? html`<div class="inline-note"><span class="grow">Checklist changed. Re-plan to apply it.</span><button class="btn sm primary" disabled=${replanning} onClick=${replan}>${replanning ? 'Re-planning…' : 'Re-plan now'}</button></div>` : null}
       <details><summary class="small muted" style=${{ cursor: 'pointer' }}>What each level means and what the plan does with it</summary>
         <div class="stack tight" style=${{ marginTop: '8px' }}>${STAGES.map((st) => html`<div class="small" key=${st.n}><span class=${'chip ' + STAGE_TONE[st.n]}>${st.name}</span> ${st.plan}</div>`)}
           <div class="hint">The levels follow how memory is built: first meet the idea, then retrieve it from memory (retrieval practice), then return to it at growing gaps (spaced relearning). Updating this honestly beats re-reading: mark a topic "Revised" only when you could recall it without the notes. Finishing a Learn or Practise session in the plan moves a topic up automatically.</div></div></details>

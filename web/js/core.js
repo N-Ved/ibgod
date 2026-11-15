@@ -58,7 +58,7 @@ export function useStore() {
 let toastId = 0;
 export function toast(text, { error = false, action, ms = 4500 } = {}) {
   const id = ++toastId;
-  store.set({ toasts: [...state.toasts, { id, text, error, action }] });
+  store.set({ toasts: [...state.toasts, { id, text, error, action }].slice(-2) });
   setTimeout(() => store.set({ toasts: state.toasts.filter((t) => t.id !== id) }), error ? 7000 : ms);
 }
 export function fail(e) {

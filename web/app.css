@@ -298,3 +298,9 @@ select.cov { width: auto; min-height: 32px; padding: 3px 8px; font-weight: 620; 
 select.cov1 { border-color: var(--info); } select.cov2 { border-color: var(--warn); } select.cov3 { border-color: var(--primary); } select.cov4 { border-color: var(--ok); }
 .split i.cov-seg.cov0 { background: var(--border); } .split i.cov-seg.cov1 { background: var(--info); } .split i.cov-seg.cov2 { background: var(--warn); } .split i.cov-seg.cov3 { background: var(--primary); } .split i.cov-seg.cov4 { background: var(--ok); }
 .legend .cov-key::before { background: var(--border); } .legend .cov-key.cov1::before { background: var(--info); } .legend .cov-key.cov2::before { background: var(--warn); } .legend .cov-key.cov3::before { background: var(--primary); } .legend .cov-key.cov4::before { background: var(--ok); }
+
+.inline-note { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 9px; background: var(--warn-soft); font-size: .86rem; }
+@media (max-width: 820px) {
+  .toasts { gap: 5px; }
+  .toast { padding: 6px 11px; font-size: .84rem; border-radius: 9px; font-weight: 520; }
+}

@@ -256,7 +256,10 @@ for (const [route, selr, name] of [['plan', '.week .day', '31-mobile-plan'], ['s
   note(ov <= 1, `no horizontal scrolling on a phone (${route})`, `overflow=${ov}px`);
   await m.screenshot({ path: `${OUT}/${name}.png` });
 }
-await m.goto(BASE + '/#/subjects/physics/topics'); await m.waitForSelector('.topic'); await m.screenshot({ path: `${OUT}/37-mobile-topics.png` });
+await m.goto(BASE + '/#/subjects/physics/topics'); await m.waitForSelector('.topic');
+await m.locator('select[aria-label^="Set all of"]').first().selectOption('2'); await m.waitForSelector('.inline-note');
+const mov = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth); note(mov <= 1, 'no horizontal scrolling on a phone (checklist)', `overflow=${mov}px`);
+await m.screenshot({ path: `${OUT}/37-mobile-topics.png` });
 
 // back to the default theme for the next run
 await page.goto(BASE + '/#/settings'); await page.waitForSelector('#st-name'); await page.locator('.seg button', { hasText: 'Match device' }).click(); await page.waitForTimeout(500);
