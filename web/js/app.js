@@ -42,12 +42,15 @@ function useRoute() {
 // Keep the Authelia session alive only while the student is really using the page.
 let lastActivity = Date.now();
 ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach((ev) => window.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true, capture: true }));
-setInterval(() => {
+// Also notices when the app itself was updated, so an old open tab offers a reload instead of running stale code.
+function checkAlive() {
   const playing = [...document.querySelectorAll('video, audio')].some((m) => !m.paused);
   if (document.visibilityState === 'visible' && (playing || Date.now() - lastActivity < 4 * 60 * 1000) && !store.get().sessionLost) {
-    api('/api/ping').catch(() => {});
+    api('/api/ping').then((r) => { const mine = store.get().me && store.get().me.build; if (r && r.build && mine && r.build !== mine) store.set({ updateReady: true }); }).catch(() => {});
   }
-}, 110 * 1000);
+}
+setInterval(checkAlive, 110 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { lastActivity = Date.now(); checkAlive(); } });
 
 function More() {
   const { me } = useStore();
@@ -80,7 +83,7 @@ function CreatedIssues({ data, onClose }) {
 }
 
 function Shell() {
-  const { me, toasts, sessionLost, created, media, issueCount } = useStore();
+  const { me, toasts, sessionLost, created, media, issueCount, updateReady } = useStore();
   const route = useRoute();
   useEffect(() => {
     if (me && me.onboarded) api('/api/dashboard').then((d) => store.set({ issueCount: d.issue_count })).catch(() => {});
@@ -117,6 +120,7 @@ function Shell() {
     </nav>
     <div>
       <header class="topbar"><a class="brand" href="#/today"><span class="brand-mark"><${Icon} name="spark" size=${18} /></span> IB God</a><span class="grow"></span><a class="btn ghost icon" href="#/settings" aria-label="Settings"><${Icon} name="user" /></a></header>
+      ${updateReady ? html`<div class="update-bar"><span class="grow">A new version of IB God is ready.</span><button class="btn sm primary" onClick=${() => location.reload()}>Reload</button></div>` : null}
       <main class="main">
         ${indexing ? html`<div class="page"><div class="banner"><span class="spinner"></span><div>The library is still being indexed (${Math.round((100 * me.index.text_done) / me.index.text_total)}%). Search and topic materials fill in as it finishes.</div></div></div>` : null}
         ${view}

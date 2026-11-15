@@ -71,6 +71,8 @@ async def security(request: Request, call_next):
     h = response.headers
     h.setdefault("X-Content-Type-Options", "nosniff")
     h.setdefault("Referrer-Policy", "same-origin")
+    if not path.startswith(("/api/", "/healthz")) and "cache-control" not in h:
+        h["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
     h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
@@ -156,7 +158,7 @@ def me_payload(user: User) -> dict:
         c = catalog.get_subject(s["subject"]) or {}
         s.update(name=c.get("name", s["subject"]), short=c.get("short", s["subject"]), group=c.get("group", 0), family=c.get("family"))
     idx = indexer.status()
-    return {"username": user.username, "display_name": row.get("display_name") or user.name, "email": row.get("email") or user.email, "is_admin": user.is_admin,
+    return {"build": BUILD, "username": user.username, "display_name": row.get("display_name") or user.name, "email": row.get("email") or user.email, "is_admin": user.is_admin,
             "onboarded": bool(row.get("onboarded")), "settings": settings, "subjects": subs, "today": planner.today_local().isoformat(),
             "llm": llm.info(), "index": {"phase": idx["phase"], "text_done": idx["text_done"], "text_total": idx["text_total"]},
             "links": {"logout": config.LOGOUT_URL, "docs": config.DOCS_BASE, "view": config.VIEW_BASE}}
@@ -172,9 +174,23 @@ def get_me(user: User = Depends(current_user)):
     return me_payload(user)
 
 
+def _build_id() -> str:
+    """Changes whenever any file of the web app changes, so open tabs can tell they are out of date."""
+    import hashlib
+    h = hashlib.sha1()
+    for f in sorted(config.WEB_DIR.rglob("*")):
+        if f.is_file():
+            st = f.stat()
+            h.update(f"{f.relative_to(config.WEB_DIR)}:{st.st_size}:{int(st.st_mtime)}".encode())
+    return h.hexdigest()[:12]
+
+
+BUILD = _build_id()
+
+
 @app.get("/api/ping")
 def ping(user: User = Depends(current_user)):
-    return {"ok": True, "today": planner.today_local().isoformat()}
+    return {"ok": True, "today": planner.today_local().isoformat(), "build": BUILD}
 
 
 @app.get("/api/catalog")
