@@ -1,4 +1,4 @@
-# IB God — study planner for the n-ved.com home server.
+# IB God — study planner for the n-ved.com home server. (No AI model: the coach and feedback writer were removed.)
 #
 # Runs as its own compose project so the existing `fileserver` stack is never rebuilt or restarted by it.
 # The only link to that stack is the shared `fileserver_apps` network, where Caddy (after Authelia has
@@ -33,7 +33,6 @@ services:
       TZ: Europe/Stockholm
       IBGOD_LIBRARY_ROOT: /library
       IBGOD_DATA_DIR: /data
-      IBGOD_LLM_URL: http://llm:8080
       IBGOD_TRUSTED_PROXY_HOSTS: caddy
       IBGOD_PUBLIC_HOSTS: ibgod.n-ved.com
       IBGOD_ADMIN_GROUPS: lldap_admin
@@ -44,8 +43,9 @@ services:
       # never let Docker create an empty folder on the system disk if the data drive is missing
       - {type: bind, source: /mnt/files/docs, target: /library, read_only: true, bind: {create_host_path: false}}
       - ./data:/data
-    networks: [apps, internal]
-    depends_on: [llm]
+      # FileBrowser's database and config, read-only: its users, groups and access rules decide what each person sees here
+      - {type: bind, source: /opt/fileserver/filebrowser-data, target: /filebrowser, read_only: true, bind: {create_host_path: false}}
+    networks: [apps]
     mem_limit: 3g
     cpus: 3.0
     pids_limit: 256
@@ -56,47 +56,7 @@ services:
       retries: 3
       start_period: 20s
 
-  # Local language model (Qwen3.5-4B, Apache-2.0) served by llama.cpp. CPU only, one request at a time.
-  # It can reach nothing but the app: the `internal` network has no route to the LAN or the internet.
-  llm:
-    <<: *hardening
-    image: ghcr.io/ggml-org/llama.cpp@sha256:c7d58273d753d33a352e5c41ab300c5ae040a16fa4b202231bb606478065c124
-    container_name: ibgod-llm
-    user: "1000:1000"
-    command:
-      - --model
-      - /models/Qwen3.5-4B-Q4_K_M.gguf
-      - --ctx-size
-      - "12288"
-      - --threads
-      - "4"                       # the i7-4790S has 4 physical cores; more threads are slower
-      - --parallel
-      - "1"
-      - --reasoning-budget
-      - "0"                       # answer directly; hidden "thinking" would triple response time on this CPU
-      - --no-webui
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-    tmpfs:
-      - /tmp:size=64m
-    volumes:
-      - ./models:/models:ro
-    networks: [internal]
-    mem_limit: 6g
-    cpus: 4.0
-    pids_limit: 128
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
-      interval: 30s
-      timeout: 6s
-      retries: 5
-      start_period: 60s
-
 networks:
-  internal:
-    internal: true               # app <-> model only, no egress
   apps:
     external: true
     name: fileserver_apps        # existing network of the fileserver stack (internal: caddy <-> apps, no egress)

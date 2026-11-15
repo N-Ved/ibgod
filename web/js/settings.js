@@ -14,8 +14,7 @@ function Admin() {
       <span class="chip ${ix.phase === 'idle' ? 'ok' : ix.phase === 'error' ? 'danger' : 'info'}">Indexer: ${ix.phase}</span>
       <span class="chip">${ix.text_done.toLocaleString()} / ${ix.text_total.toLocaleString()} files read</span>
       <span class="chip">Database ${fmtSize(data.db_bytes)}</span>
-      <span class=${'chip ' + (data.llm.available ? 'ok' : 'warn')}>AI model: ${data.llm.available ? (data.llm.model || 'running') : 'offline'}${data.llm.busy ? ' (busy)' : ''}</span>
-      <span class="chip">Feedback queue: ${data.feedback_queue}</span>
+      <span class=${'chip ' + (data.access.error ? 'danger' : 'ok')} title=${data.access.error || ''}>FileBrowser access: ${data.access.error ? 'cannot read' : `${data.access.users} users, ${data.access.rules} rules`}</span>
       ${data.last_scan ? html`<span class="chip">Last scan ${new Date(data.last_scan.at * 1000).toLocaleString()}</span>` : null}
     </div>
     ${ix.error ? html`<div class="banner danger">${ix.error}</div>` : null}
@@ -105,7 +104,7 @@ export function Settings() {
         <div class="field"><label for="st-del">Delete all my IB God data</label>
           <div class="row wrap"><input id="st-del" class="input grow" placeholder="Type DELETE to confirm" value=${confirmText} onInput=${(e) => setConfirmText(e.target.value)} />
             <button class="btn danger" disabled=${confirmText !== 'DELETE'} onClick=${wipe}>Delete</button></div>
-          <div class="hint">Removes your plan, grades, chats and feedback permanently. Your school login is not affected.</div></div>
+          <div class="hint">Removes your plan, grades, checklist and progress permanently. Your school login is not affected.</div></div>
       </div>
     </div>
 

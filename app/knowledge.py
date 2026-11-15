@@ -152,7 +152,7 @@ TECHNIQUES: list[dict] = [
          sources=_src("zimmerman2002", "ibo_assess")),
     dict(id="coursework-first", title="Bank the coursework marks", category="Planning", utility="practical", minutes="planned",
          summary="Internal assessments are worth 20–30% of most subjects and are the only marks you can secure before the exam hall. A strong IA lowers the exam score you need for the next grade.",
-         how=["Read the IA criteria in the subject guide and one high-scoring exemplar from the library before you start.", "Work to the criteria: every paragraph should earn marks under a named criterion.", "Finish drafts early enough to use your teacher's one round of feedback.", "Use IB God's feedback writer for a criterion-by-criterion check before you hand in."],
+         how=["Read the IA criteria in the subject guide and one high-scoring exemplar from the library before you start.", "Work to the criteria: every paragraph should earn marks under a named criterion.", "Finish drafts early enough to use your teacher's one round of feedback."],
          when="Throughout year one and early year two; before intensive exam revision begins.", pitfalls=["Leaving IAs until they collide with mock exams."],
          sources=_src("ibo_assess")),
 ]
@@ -241,91 +241,3 @@ FAMILY_TIPS: dict[str, dict] = {
 
 CORE_POINTS_NOTE = ("TOK and the Extended Essay together add up to 3 points to your diploma total, and a grade E in either is a failing condition. "
                     "Strong core work is often the cheapest points available.")
-
-# ── Assessment rubrics for the feedback writer. Descriptors are our summaries of the published criteria. ──
-RUBRICS: dict[str, dict] = {
-    "ee_2018": dict(name="Extended Essay (exams up to November 2026)", words=4000, total=34, applies="Extended essays assessed with the 2018 guide.",
-        criteria=[
-            ("A", "Focus and method", 6, "The topic and research question are clearly stated, focused and appropriate to the subject; the methodology and sources are well chosen and applied."),
-            ("B", "Knowledge and understanding", 6, "Source material is clearly relevant and used effectively; subject-specific terminology and concepts are used accurately and consistently."),
-            ("C", "Critical thinking", 12, "Research is analysed and evaluated; a reasoned argument is developed from the evidence; conclusions are supported; limitations are critically evaluated."),
-            ("D", "Presentation", 4, "Structure and layout support reading: title page, contents, headings, page numbers, consistent citations and bibliography, appropriate use of tables and figures."),
-            ("E", "Engagement", 6, "Reflections on planning and progress show intellectual initiative, decision-making and a personal, evaluative voice (assessed from the reflection form).")]),
-    "ee_2027": dict(name="Extended Essay (first exams May 2027)", words=4000, total=30, applies="Extended essays assessed with the 2027 guide, including the interdisciplinary pathway.",
-        criteria=[
-            ("A", "Framework for the essay", 6, "A clear, focused research question; appropriate research methods; a structure that supports the argument."),
-            ("B", "Knowledge and understanding", 6, "Accurate, relevant knowledge of the topic; subject-specific terminology and concepts used correctly."),
-            ("C", "Analysis and line of argument", 6, "Research is analysed, and a coherent line of argument runs from the research question to the conclusion."),
-            ("D", "Discussion and evaluation", 8, "Findings are discussed in a balanced way; the research and argument are evaluated; the conclusion follows from the evidence."),
-            ("E", "Reflection", 4, "The reflective statement evaluates the learning experience and its effect on the student as a learner.")]),
-    "tok_essay": dict(name="TOK essay", words=1600, total=10, applies="Theory of Knowledge essay on a prescribed title.",
-        criteria=[("TOK", "Does the essay provide a clear, coherent and critical exploration of the title?", 10,
-                   "Top band: sustained focus on the title; effectively linked to areas of knowledge; arguments are clear, coherent and supported by specific examples; different points of view are considered and evaluated; implications are drawn.")]),
-    "tok_exhibition": dict(name="TOK exhibition", words=950, total=10, applies="Three objects and commentary on one IA prompt.",
-        criteria=[("TOK", "Does the exhibition show how TOK manifests in the world around us?", 10,
-                   "Top band: three objects with clearly identified real-world contexts; links between each object and the chosen prompt are explicit and well explained; each object's particular contribution is justified; all points are supported by evidence and refer back to the prompt.")]),
-    "science_ia": dict(name="Sciences IA (Biology, Chemistry, Physics, SEHS)", words=3000, total=24, applies="Scientific investigation, first assessment 2025.",
-        criteria=[
-            ("RD", "Research design", 6, "Focused research question with context; methodological considerations for collecting relevant and sufficient data are explained; the method is described so it could be reproduced."),
-            ("DA", "Data analysis", 6, "Data recorded and processed clearly and precisely; uncertainties considered appropriately; processing is relevant to the research question and carried out accurately."),
-            ("C", "Conclusion", 6, "A conclusion relevant to the research question, fully consistent with the analysis, and justified by comparison with accepted scientific context."),
-            ("E", "Evaluation", 6, "Specific methodological weaknesses and limitations are identified with their relative impact; realistic improvements are explained.")]),
-    "math_ia": dict(name="Mathematics IA (exploration)", words=0, total=20, applies="Mathematics AA and AI exploration, 12–20 pages.",
-        criteria=[
-            ("A", "Presentation", 4, "Coherent, well organised and concise; aim stated; logical flow; introduction, body, conclusion."),
-            ("B", "Mathematical communication", 4, "Appropriate notation, symbols and terminology; key terms and variables defined; graphs, tables and diagrams labelled and placed where used."),
-            ("C", "Personal engagement", 3, "Authentic personal engagement that drives the exploration: independent thinking, own examples, a personal reason that shapes the work."),
-            ("D", "Reflection", 3, "Substantial critical reflection throughout: discussing results, limitations, extensions and the significance of findings."),
-            ("E", "Use of mathematics", 6, "Relevant mathematics commensurate with the course level, explored with thorough understanding; correct. For HL: sophistication and rigour.")]),
-    "economics_ia": dict(name="Economics IA commentary", words=800, total=14, applies="One commentary of the three-commentary portfolio (first assessment 2022).",
-        criteria=[
-            ("A", "Diagrams", 3, "Relevant, accurate and correctly labelled diagrams with a full explanation."),
-            ("B", "Terminology", 2, "Economic terminology relevant to the article is used appropriately throughout."),
-            ("C", "Application and analysis", 3, "Relevant economic theory is applied to the article throughout, with effective analysis."),
-            ("D", "Key concept", 3, "The link between the chosen key concept and the article is fully explained."),
-            ("E", "Evaluation", 3, "Judgements are supported by effective, balanced reasoning.")]),
-    "business_ia": dict(name="Business Management IA (research project)", words=1800, total=25, applies="Business research project, first assessment 2024.",
-        criteria=[
-            ("A", "Integration of a key concept", 5, "The connection between the key concept (change, creativity, ethics or sustainability) and the organisation is analysed and integrated throughout."),
-            ("B", "Supporting documents", 4, "Three to five relevant, recent supporting documents providing a range of ideas and views, with sufficient depth."),
-            ("C", "Selection and application of tools and theories", 4, "Relevant business management tools and theories are selected and applied effectively to the research question."),
-            ("D", "Analysis and evaluation", 5, "Data from the supporting documents is analysed and evaluated effectively, integrating ideas coherently."),
-            ("E", "Conclusions", 3, "Conclusions are consistent with the evidence and answer the research question."),
-            ("F", "Structure", 2, "An appropriate structure that organises ideas clearly."),
-            ("G", "Presentation", 2, "Title page, accurate table of contents, headings, numbered pages.")]),
-    "history_ia": dict(name="History IA (historical investigation)", words=2200, total=25, applies="Historical investigation.",
-        criteria=[
-            ("A", "Identification and evaluation of sources", 6, "Clear research question; two appropriate sources identified and their relevance explained; detailed analysis of value and limitations with reference to origin, purpose and content."),
-            ("B", "Investigation", 15, "Clear, coherent, focused; well-developed critical analysis of a range of sources; evaluation of different perspectives; a reasoned conclusion consistent with the evidence."),
-            ("C", "Reflection", 4, "Reflection on what the investigation revealed about the methods used by historians and the challenges they face, clearly connected to the rest of the investigation.")]),
-    "psychology_ia": dict(name="Psychology IA (experimental study)", words=2200, total=22, applies="Experimental study (guide first assessed 2019).",
-        criteria=[
-            ("I", "Introduction", 6, "The aim is stated and its relevance explained; the theory or model is described and linked to the investigation; variables and hypotheses are correctly stated."),
-            ("II", "Exploration", 4, "Research design, sampling technique, participants, controls and materials are explained and justified."),
-            ("III", "Analysis", 6, "Descriptive and inferential statistics are appropriate and correctly applied; a correct graph addresses the hypothesis; findings are interpreted with regard to the data and hypothesis."),
-            ("IV", "Evaluation", 6, "Findings are discussed with regard to the theory; strengths and limitations of design, sample and procedure are stated and explained; relevant modifications are justified.")]),
-    "geography_ia": dict(name="Geography IA (fieldwork report)", words=2500, total=25, applies="Fieldwork investigation.",
-        criteria=[
-            ("A", "Fieldwork question and geographic context", 3, "A focused fieldwork question linked to the syllabus with a clear geographic context and locational map."),
-            ("B", "Methods of investigation", 3, "Methods described and justified; they produce sufficient, good-quality data."),
-            ("C", "Quality and treatment of information collected", 6, "Appropriate, well-presented data using a range of techniques that are relevant to the question."),
-            ("D", "Written analysis", 8, "Thorough analysis that refers to the data, explains patterns and anomalies, and answers the fieldwork question."),
-            ("E", "Conclusion", 2, "A clear conclusion consistent with the analysis."),
-            ("F", "Evaluation", 3, "Methods are evaluated clearly with valid recommendations for improvement or extension.")]),
-    "lang_a_hl_essay": dict(name="Language A: HL essay", words=1500, total=20, applies="HL essay, 1,200–1,500 words.",
-        criteria=[
-            ("A", "Knowledge, understanding and interpretation", 5, "Excellent knowledge of the work; a persuasive interpretation of its implications in relation to the chosen line of inquiry; well-chosen references."),
-            ("B", "Analysis and evaluation", 5, "Insightful analysis and evaluation of how the author's choices of language, technique and style shape meaning in relation to the line of inquiry."),
-            ("C", "Focus, organization and development", 5, "Well organised and focused; the line of inquiry is developed logically and convincingly; supporting examples are well integrated."),
-            ("D", "Language", 5, "Clear, effective, precise language; high accuracy in grammar, vocabulary and sentence construction; appropriate academic register.")]),
-    "general_essay": dict(name="General academic writing (any subject)", words=0, total=0, applies="Use when no IB rubric above fits. Gives formative comments only.",
-        criteria=[
-            ("1", "Focus and argument", 0, "A clear question or thesis that the whole piece answers."),
-            ("2", "Evidence and analysis", 0, "Claims supported by specific evidence that is analysed rather than described."),
-            ("3", "Structure and coherence", 0, "Logical order, clear paragraphs with one main idea each, signposting."),
-            ("4", "Language and referencing", 0, "Precise, formal language; consistent citations.")]),
-}
-
-ACADEMIC_INTEGRITY_NOTE = ("This feedback is formative guidance generated on this server by a small AI model. It reads only the text: graphs, tables, images and equations in your file are invisible to it. "
-                           "It cannot grade: in our tests it could not tell a top-mark essay from a weak one, so it gives no marks or bands, only comments. It can be wrong and does not replace your teacher. "
-                           "It will not rewrite your work: under IB academic integrity rules the work you submit must be your own.")

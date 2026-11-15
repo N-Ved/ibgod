@@ -197,33 +197,13 @@ await page.waitForSelector('.card h3');
 await page.locator('.card h3', { hasText: 'Retrieval practice' }).click();
 await page.waitForSelector('text=How to do it');
 await shot(page, '18-methods');
-await page.goto(BASE + '/#/coach');
-await page.waitForSelector('.composer textarea');
-if (!process.env.FAST) {
-await page.fill('.composer textarea', 'Explain the Doppler effect in physics and how the observed frequency is calculated.');
-await page.locator('.composer .btn.primary').click();
-await page.waitForFunction(() => { const m = document.querySelectorAll('.msg.assistant'); return m.length && !m[m.length - 1].querySelector('.typing') && m[m.length - 1].textContent.length > 80 && !document.querySelector('.composer .spinner'); }, null, { timeout: 300000 });
-const answer = await page.locator('.msg.assistant').last().textContent();
-note(answer.length > 80 && !/\\frac|\$[a-zA-Z]/.test(answer), 'coach answers in the browser with readable formulas', answer.slice(0, 120));
-}
-await shot(page, '19-coach');
-await page.goto(BASE + '/#/feedback');
-await page.waitForSelector('#fb-rubric');
-await page.selectOption('#fb-rubric', 'science_ia');
-await shot(page, '20-feedback');
-if (!process.env.FAST) {
-const draft = ('Investigating how temperature affects how fast sugar dissolves. Introduction. I chose this topic because I like tea. My research question is does temperature change dissolving. ' +
-  'Method. I put some sugar in water at different temperatures and timed how long it took to dissolve using my phone. I did it once for each temperature. Results. Cold water took 95 seconds. Warm water took 50 seconds. ' +
-  'Hot water took 20 seconds. Conclusion. My hypothesis was right. This is because particles move faster when hot. The experiment went well and there were no problems. ').repeat(2);
-await page.fill('#fb-title', 'Browser test draft');
-await page.fill('#fb-text', draft);
-await page.locator('.btn.primary', { hasText: 'Get feedback' }).click();
-await page.waitForSelector('text=Automatic checks', { timeout: 600000 });
-note((await page.locator('.card h2', { hasText: 'Research design' }).count()) === 1, 'feedback result shows comments per criterion');
-note((await page.locator('text=Ways to strengthen it').count()) >= 1, 'feedback lists ways to strengthen the work');
-await page.evaluate(() => window.scrollTo(0, 0));
-await shot(page, '20b-feedback-result');
-}
+await page.goto(BASE + '/#/apps');
+await page.waitForSelector('.app-card', { timeout: 20000 });
+note((await page.locator('.app-card', { hasText: 'Sign-in & security' }).count()) === 1, 'apps page shows the account card');
+note((await page.locator('.app-card', { hasText: 'User admin' }).count()) === 0, 'apps page hides services this session cannot open');
+await shot(page, '19-apps');
+note((await page.locator('a.nav-item', { hasText: 'Coach' }).count()) === 0 && (await page.locator('a.nav-item', { hasText: 'Feedback' }).count()) === 0, 'coach and feedback writer are gone from the menu');
+
 await page.goto(BASE + '/#/settings');
 await page.waitForSelector('#st-name');
 await shot(page, '21-settings');
@@ -248,7 +228,7 @@ note(!(await m.locator('.sidebar').isVisible()), 'mobile hides the sidebar');
 const overflow = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 note(overflow <= 1, 'no horizontal scrolling on a phone (today)', `overflow=${overflow}px`);
 await m.screenshot({ path: `${OUT}/30-mobile-today.png` });
-for (const [route, selr, name] of [['plan', '.week .day', '31-mobile-plan'], ['subjects', '.subject-card', '32-mobile-subjects'], ['library', 'input[type=search]', '33-mobile-library'], ['more', '.page .nav-item', '34-mobile-more'], ['settings', '#st-name', '35-mobile-settings'], ['feedback', '#fb-rubric', '36-mobile-feedback']]) {
+for (const [route, selr, name] of [['plan', '.week .day', '31-mobile-plan'], ['subjects', '.subject-card', '32-mobile-subjects'], ['library', 'input[type=search]', '33-mobile-library'], ['more', '.page .nav-item', '34-mobile-more'], ['settings', '#st-name', '35-mobile-settings'], ['apps', '.app-card', '36-mobile-apps']]) {
   await m.goto(BASE + '/#/' + route);
   await m.waitForSelector(selr, { timeout: 15000 });
   await m.waitForTimeout(400);

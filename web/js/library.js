@@ -90,11 +90,10 @@ export function Library({ query }) {
           <${ResourceGroup} title="Calculator and exam rules" items=${[...overview.general.calculator_rules.slice(0, 1), ...overview.general.exam_conduct.slice(0, 1)]} /></div>
         <div class="card stack"><div class="card-title"><h2>Core: TOK and Extended Essay</h2></div>
           <div class="hint">TOK and the EE together are worth up to 3 diploma points.</div>
-          <div class="row wrap"><button class="btn sm" onClick=${() => setSubject('tok')}>All TOK material (${overview.core.tok.length})</button><button class="btn sm" onClick=${() => setSubject('ee')}>All EE material (${overview.core.ee.length}${overview.core.ee.length >= 400 ? '+' : ''})</button>
-            <a class="btn sm" href="#/feedback">Get feedback on a draft</a></div>
+          <div class="row wrap"><button class="btn sm" onClick=${() => setSubject('tok')}>All TOK material (${overview.core.tok.length})</button><button class="btn sm" onClick=${() => setSubject('ee')}>All EE material (${overview.core.ee.length}${overview.core.ee.length >= 400 ? '+' : ''})</button></div>
           <${ResourceGroup} title="TOK guides and exemplars" items=${overview.core.tok.filter((r) => ['subject_guide', 'tok_exemplar', 'textbook'].includes(r.kind)).slice(0, 5)} />
           <${ResourceGroup} title="Extended Essay guide and books" items=${overview.core.ee.filter((r) => ['subject_guide', 'textbook', 'coursework_guide', 'site_home', 'revision_guide'].includes(r.kind)).slice(0, 5)} /></div>
       </div>
-      <div class="hint center">Prefer folders? The same files are in the <a href=${me.links.docs} target="_blank" rel="noopener">file browser</a>.</div>` : html`<${Spinner} />`}
+      <div class="hint center">Prefer folders? The same files are in the <a href="#/apps">Files app</a>.</div>` : html`<${Spinner} />`}
   </div>`;
 }

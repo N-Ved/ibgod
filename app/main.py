@@ -6,22 +6,20 @@ import logging
 import mimetypes
 import os
 import re
-import tempfile
-import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import advice, auth, backup, catalog, coach, config, db, feedback, indexer, llm, planner, search
+from . import access, advice, apps, auth, backup, catalog, config, db, indexer, planner, search
 from .auth import User, current_user
-from .knowledge import FAMILY_TIPS, GRADE_BANDS, RUBRICS, TECHNIQUES
+from .knowledge import FAMILY_TIPS, GRADE_BANDS, TECHNIQUES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ibgod")
@@ -49,8 +47,7 @@ async def lifespan(_: FastAPI):
             pass
     if config.AUTO_INDEX:
         indexer.start()
-    if config.FEEDBACK_WORKER:
-        feedback.start()
+    if config.BACKGROUND_JOBS:
         backup.start()
     yield
     indexer.stop()
@@ -88,6 +85,21 @@ async def security(request: Request, call_next):
 async def unhandled(request: Request, exc: Exception):
     log.exception("unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse({"detail": "Something went wrong on the server."}, status_code=500)
+
+
+@contextmanager
+def ro_for(user: User):
+    """Read connection where `visible(r.path)` applies this user's FileBrowser access."""
+    with db.ro() as con:
+        access.bind(con, user.username)
+        yield con
+
+
+@contextmanager
+def tx_for(user: User):
+    with db.tx() as con:
+        access.bind(con, user.username)
+        yield con
 
 
 def now_iso() -> str:
@@ -150,7 +162,7 @@ def catalogue() -> list[dict]:
 
 
 def me_payload(user: User) -> dict:
-    with db.ro() as con:
+    with ro_for(user) as con:
         row = db.one(con, "SELECT * FROM users WHERE username=?", (user.username,)) or {}
         subs = db.rows(con, "SELECT * FROM user_subjects WHERE username=? ORDER BY position, id", (user.username,))
     settings = json.loads(row.get("settings") or "{}")
@@ -160,7 +172,7 @@ def me_payload(user: User) -> dict:
     idx = indexer.status()
     return {"build": BUILD, "username": user.username, "display_name": row.get("display_name") or user.name, "email": row.get("email") or user.email, "is_admin": user.is_admin,
             "onboarded": bool(row.get("onboarded")), "settings": settings, "subjects": subs, "today": planner.today_local().isoformat(),
-            "llm": llm.info(), "index": {"phase": idx["phase"], "text_done": idx["text_done"], "text_total": idx["text_total"]},
+            "index": {"phase": idx["phase"], "text_done": idx["text_done"], "text_total": idx["text_total"]},
             "links": {"logout": config.LOGOUT_URL, "docs": config.DOCS_BASE, "view": config.VIEW_BASE}}
 
 
@@ -202,9 +214,9 @@ def get_catalog(user: User = Depends(current_user)):
 def textbooks(subject: str, level: str = "HL", user: User = Depends(current_user)):
     check_key(subject)
     tags = catalog.subject_tags(subject)
-    with db.ro() as con:
+    with ro_for(user) as con:
         rows = db.rows(con, f"""SELECT {search.RES_COLS} FROM resources r WHERE r.subject IN ({','.join('?' * len(tags))}) AND r.collection='books' AND r.kind='textbook'
-                                AND r.ext IN ('pdf','epub') AND (r.level IS NULL OR r.level IN (?, 'HLSL')) AND (r.lang IS NULL OR r.lang='en') AND COALESCE(r.syllabus,'current')='current'
+                                AND r.ext IN ('pdf','epub') AND (r.level IS NULL OR r.level IN (?, 'HLSL')) AND (r.lang IS NULL OR r.lang='en') AND COALESCE(r.syllabus,'current')='current' AND visible(r.path)
                                 ORDER BY COALESCE(r.year,0) DESC, r.title LIMIT 60""", (*tags, level if level in ("HL", "SL") else "HL"))
     return {"textbooks": [search.public(r) for r in rows]}
 
@@ -265,7 +277,7 @@ def _save_subject(con, username: str, s: SubjectIn, position: int) -> None:
     level = s.level if s.level in subj["levels"] else subj["levels"][0]
     target = max(s.target_grade, s.current_grade)
     tb = s.textbook_id
-    if tb is not None and not con.execute("SELECT 1 FROM resources WHERE id=? AND collection='books'", (tb,)).fetchone():
+    if tb is not None and not con.execute("SELECT 1 FROM resources r WHERE id=? AND collection='books' AND visible(r.path)", (tb,)).fetchone():
         tb = None
     prev = db.one(con, "SELECT current_grade FROM user_subjects WHERE username=? AND subject=?", (username, key))
     con.execute("""INSERT INTO user_subjects(username, subject, level, current_grade, target_grade, textbook_id, textbook_other, exam_date, position) VALUES(?,?,?,?,?,?,?,?,?)
@@ -281,7 +293,7 @@ def setup(body: SetupIn, user: User = Depends(current_user)):
     keys = [s.subject for s in body.subjects]
     if len(set(keys)) != len(keys):
         raise HTTPException(422, "Each subject can only be added once")
-    with db.tx() as con:
+    with tx_for(user) as con:
         settings = auth.get_settings(con, user.username)
         settings.update(session_month=body.session_month, session_year=body.session_year, weekly_minutes=body.weekly_minutes, exam_start=body.exam_start)
         name = _clean_text(body.display_name, 80)
@@ -313,7 +325,7 @@ def put_settings(body: SettingsIn, user: User = Depends(current_user)):
         raise HTTPException(422, "Minutes per day must be between 0 and 720")
     if body.exam_start:
         check_date(body.exam_start)
-    with db.tx() as con:
+    with tx_for(user) as con:
         settings = auth.get_settings(con, user.username)
         before = json.dumps({k: settings.get(k) for k in ("session_month", "session_year", "weekly_minutes", "exam_start")}, sort_keys=True)
         for k in ("session_month", "session_year", "weekly_minutes", "theme"):
@@ -334,7 +346,7 @@ def put_settings(body: SettingsIn, user: User = Depends(current_user)):
 # ───────────────────────── subjects ─────────────────────────
 @app.post("/api/subjects")
 def add_subject(body: SubjectIn, user: User = Depends(current_user)):
-    with db.tx() as con:
+    with tx_for(user) as con:
         n = con.execute("SELECT COUNT(*) FROM user_subjects WHERE username=?", (user.username,)).fetchone()[0]
         exists = con.execute("SELECT 1 FROM user_subjects WHERE username=? AND subject=?", (user.username, body.subject)).fetchone()
         if n >= 10 and not exists:
@@ -357,7 +369,7 @@ class SubjectPatch(BaseModel):
 @app.patch("/api/subjects/{key}")
 def patch_subject(key: str, body: SubjectPatch, user: User = Depends(current_user)):
     check_key(key)
-    with db.tx() as con:
+    with tx_for(user) as con:
         row = my_subject(con, user.username, key)
         subj = catalog.get_subject(key)
         level = body.level if body.level in subj["levels"] else row["level"]
@@ -367,7 +379,7 @@ def patch_subject(key: str, body: SubjectPatch, user: User = Depends(current_use
         if body.clear_textbook:
             tb = None
         elif body.textbook_id is not None:
-            if not con.execute("SELECT 1 FROM resources WHERE id=? AND collection='books'", (body.textbook_id,)).fetchone():
+            if not con.execute("SELECT 1 FROM resources r WHERE id=? AND collection='books' AND visible(r.path)", (body.textbook_id,)).fetchone():
                 raise HTTPException(422, "Unknown textbook")
             tb = body.textbook_id
         exam = row["exam_date"]
@@ -386,7 +398,7 @@ def patch_subject(key: str, body: SubjectPatch, user: User = Depends(current_use
 
 @app.delete("/api/subjects/{key}")
 def delete_subject(key: str, user: User = Depends(current_user)):
-    with db.tx() as con:
+    with tx_for(user) as con:
         my_subject(con, user.username, key)
         con.execute("DELETE FROM user_subjects WHERE username=? AND subject=?", (user.username, key))
         con.execute("DELETE FROM tasks WHERE username=? AND subject=? AND status='todo'", (user.username, key))
@@ -397,7 +409,7 @@ def delete_subject(key: str, user: User = Depends(current_user)):
 @app.get("/api/subjects/{key}")
 def get_subject(key: str, user: User = Depends(current_user)):
     check_key(key)
-    with db.tx() as con:
+    with tx_for(user) as con:
         row = my_subject(con, user.username, key)
         profile = planner.load_profile(con, user.username)
         pub = catalog.public_subject(key)
@@ -413,7 +425,7 @@ def get_subject(key: str, user: User = Depends(current_user)):
                            "enabled": t["default_on"] if st.get("enabled") is None else bool(st["enabled"]), "confidence": st.get("confidence"), "coverage": int(st.get("coverage") or 0)})
             if ts:
                 units.append({"code": u["code"], "name": u["name"], "topics": ts})
-        tb = db.one(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.id=?", (row["textbook_id"],)) if row["textbook_id"] else None
+        tb = db.one(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.id=? AND visible(r.path)", (row["textbook_id"],)) if row["textbook_id"] else None
         done = {r["topic_code"]: r["n"] for r in db.rows(con, "SELECT topic_code, COUNT(*) n FROM tasks WHERE username=? AND subject=? AND status='done' AND topic_code IS NOT NULL GROUP BY 1", (user.username, key))}
         grades = db.rows(con, "SELECT date, grade FROM grade_log WHERE username=? AND subject=? ORDER BY date, id", (user.username, key))
         plan_info = (db.get_meta(con, f"plan:{user.username}", {}) or {}).get("subjects", {}).get(key)
@@ -433,7 +445,7 @@ class TopicIn(BaseModel):
 @app.put("/api/subjects/{key}/topics/{code}")
 def put_topic(key: str, code: str, body: TopicIn, user: User = Depends(current_user)):
     check_key(key)
-    with db.tx() as con:
+    with tx_for(user) as con:
         row = my_subject(con, user.username, key)
         if code not in {t["code"] for t in catalog.topics_for(key, row["level"])}:
             raise HTTPException(404, "Unknown topic")
@@ -457,7 +469,7 @@ class CoverageBulk(BaseModel):
 def put_coverage_bulk(key: str, body: CoverageBulk, user: User = Depends(current_user)):
     """Set the checklist level for every topic in a unit (or the whole subject) in one go."""
     check_key(key)
-    with db.tx() as con:
+    with tx_for(user) as con:
         row = my_subject(con, user.username, key)
         topics = [t for t in catalog.topics_for(key, row["level"]) if body.unit is None or t["unit_code"] == body.unit]
         if not topics:
@@ -474,7 +486,7 @@ _topic_cache: dict[tuple, tuple[float, dict]] = {}
 @app.get("/api/subjects/{key}/topics/{code}/resources")
 def topic_resources(key: str, code: str, user: User = Depends(current_user)):
     check_key(key)
-    with db.ro() as con:
+    with ro_for(user) as con:
         row = my_subject(con, user.username, key)
         topic = next((t for t in catalog.topics_for(key, row["level"]) if t["code"] == code), None)
         if not topic:
@@ -494,7 +506,7 @@ def topic_resources(key: str, code: str, user: User = Depends(current_user)):
 @app.get("/api/subjects/{key}/papers")
 def subject_papers(key: str, user: User = Depends(current_user)):
     check_key(key)
-    with db.ro() as con:
+    with ro_for(user) as con:
         row = my_subject(con, user.username, key)
         return {"papers": search.past_papers(con, key, row["level"], user.username)}
 
@@ -511,8 +523,8 @@ def add_attempt(rid: int, body: AttemptIn, user: User = Depends(current_user)):
     if body.score is not None and body.max_score is not None and body.score > body.max_score:
         raise HTTPException(422, "Score cannot be higher than the maximum")
     d = check_date(body.date) if body.date else planner.today_local().isoformat()
-    with db.tx() as con:
-        if not con.execute("SELECT 1 FROM resources WHERE id=?", (rid,)).fetchone():
+    with tx_for(user) as con:
+        if not con.execute("SELECT 1 FROM resources r WHERE id=? AND visible(r.path)", (rid,)).fetchone():
             raise HTTPException(404, "Unknown paper")
         cur = con.execute("INSERT INTO paper_attempts(username, resource_id, date, score, max_score, note) VALUES(?,?,?,?,?,?)", (user.username, rid, d, body.score, body.max_score, _clean_text(body.note, 300)))
         return {"id": cur.lastrowid}
@@ -520,7 +532,7 @@ def add_attempt(rid: int, body: AttemptIn, user: User = Depends(current_user)):
 
 @app.delete("/api/attempts/{aid}")
 def delete_attempt(aid: int, user: User = Depends(current_user)):
-    with db.tx() as con:
+    with tx_for(user) as con:
         n = con.execute("DELETE FROM paper_attempts WHERE id=? AND username=?", (aid, user.username)).rowcount
     if not n:
         raise HTTPException(404, "Not found")
@@ -542,7 +554,7 @@ def _created(before: dict, after: dict) -> list[dict]:
 @app.get("/api/dashboard")
 def dashboard(user: User = Depends(current_user)):
     today = planner.today_local()
-    with db.tx() as con:
+    with tx_for(user) as con:
         st = planner.stats(con, user.username, today)
         tasks = db.rows(con, "SELECT * FROM tasks WHERE username=? AND date=? ORDER BY status='todo' DESC, sort, id", (user.username, today.isoformat()))
         overdue = db.rows(con, "SELECT * FROM tasks WHERE username=? AND date<? AND status='todo' ORDER BY date DESC, sort LIMIT 30", (user.username, today.isoformat()))
@@ -569,7 +581,7 @@ def get_plan(start: str | None = None, days: int = Query(default=7, ge=1, le=120
     today = planner.today_local()
     d0 = planner.parse_date(check_date(start)) if start else today - timedelta(days=today.weekday())
     d1 = d0 + timedelta(days=days - 1)
-    with db.tx() as con:
+    with tx_for(user) as con:
         profile = planner.load_profile(con, user.username)
         tasks = db.rows(con, "SELECT * FROM tasks WHERE username=? AND date>=? AND date<=? ORDER BY date, sort, id", (user.username, d0.isoformat(), d1.isoformat()))
         cap = planner.capacity_map(con, user.username, profile, d0, d1)
@@ -595,7 +607,7 @@ class ReplanIn(BaseModel):
 @app.post("/api/plan/replan")
 def replan(body: ReplanIn, user: User = Depends(current_user)):
     auth.rate_limit(user.username, "replan", 30, 3600)
-    with db.tx() as con:
+    with tx_for(user) as con:
         summary = planner.generate(con, user.username, keep_pinned=body.keep_pinned)
         issues = planner.evaluate(con, user.username)
     return {"summary": summary, "issues": issues["issues"], "dismissed": issues["dismissed"]}
@@ -608,7 +620,7 @@ class ClearIn(BaseModel):
 @app.post("/api/plan/clear")
 def clear_plan(body: ClearIn, user: User = Depends(current_user)):
     """Start from scratch: remove every task (done, skipped, planned, manual). Subjects, grades, time settings and day-offs stay."""
-    with db.tx() as con:
+    with tx_for(user) as con:
         n = con.execute("DELETE FROM tasks WHERE username=?", (user.username,)).rowcount
         con.execute("DELETE FROM dismissed_issues WHERE username=?", (user.username,))
         con.execute("DELETE FROM meta WHERE key=?", (f"plan:{user.username}",))
@@ -631,7 +643,7 @@ class TaskIn(BaseModel):
 @app.post("/api/tasks")
 def add_task(body: TaskIn, user: User = Depends(current_user)):
     check_date(body.date)
-    with db.tx() as con:
+    with tx_for(user) as con:
         if body.subject:
             check_key(body.subject)
             my_subject(con, user.username, body.subject)
@@ -639,7 +651,7 @@ def add_task(body: TaskIn, user: User = Depends(current_user)):
             raise HTTPException(422, "Task limit reached")
         meta: dict = {}
         if body.resource_id is not None:
-            r = db.one(con, "SELECT id, pair_id FROM resources WHERE id=?", (body.resource_id,))
+            r = db.one(con, "SELECT id, pair_id FROM resources r WHERE id=? AND visible(r.path)", (body.resource_id,))
             if r:
                 meta = {"resources": [r["id"]], "markschemes": [r["pair_id"]] if r["pair_id"] else []}
         before = planner.evaluate(con, user.username)
@@ -665,7 +677,7 @@ class TaskPatch(BaseModel):
 def patch_task(tid: int, body: TaskPatch, user: User = Depends(current_user)):
     if body.date:
         check_date(body.date)
-    with db.tx() as con:
+    with tx_for(user) as con:
         t = db.one(con, "SELECT * FROM tasks WHERE id=? AND username=?", (tid, user.username))
         if not t:
             raise HTTPException(404, "Task not found")
@@ -718,7 +730,7 @@ def patch_task(tid: int, body: TaskPatch, user: User = Depends(current_user)):
 
 @app.delete("/api/tasks/{tid}")
 def delete_task(tid: int, user: User = Depends(current_user)):
-    with db.tx() as con:
+    with tx_for(user) as con:
         n = con.execute("DELETE FROM tasks WHERE id=? AND username=?", (tid, user.username)).rowcount
         if not n:
             raise HTTPException(404, "Task not found")
@@ -734,7 +746,7 @@ class DayIn(BaseModel):
 @app.put("/api/days/{day}")
 def put_day(day: str, body: DayIn, user: User = Depends(current_user)):
     check_date(day)
-    with db.tx() as con:
+    with tx_for(user) as con:
         before = planner.evaluate(con, user.username)
         con.execute("INSERT INTO day_overrides(username, date, minutes, note) VALUES(?,?,?,?) ON CONFLICT(username, date) DO UPDATE SET minutes=excluded.minutes, note=excluded.note",
                     (user.username, day, body.minutes, _clean_text(body.note, 120)))
@@ -745,7 +757,7 @@ def put_day(day: str, body: DayIn, user: User = Depends(current_user)):
 @app.delete("/api/days/{day}")
 def delete_day(day: str, user: User = Depends(current_user)):
     check_date(day)
-    with db.tx() as con:
+    with tx_for(user) as con:
         before = planner.evaluate(con, user.username)
         con.execute("DELETE FROM day_overrides WHERE username=? AND date=?", (user.username, day))
         after = planner.evaluate(con, user.username)
@@ -758,7 +770,7 @@ class IssueKey(BaseModel):
 
 @app.post("/api/issues/dismiss")
 def dismiss_issue(body: IssueKey, user: User = Depends(current_user)):
-    with db.tx() as con:
+    with tx_for(user) as con:
         con.execute("INSERT OR IGNORE INTO dismissed_issues(username, key, dismissed_at) VALUES(?,?,?)", (user.username, body.key, now_iso()))
         after = planner.evaluate(con, user.username)
     return {"issues": after["issues"], "dismissed": after["dismissed"]}
@@ -766,7 +778,7 @@ def dismiss_issue(body: IssueKey, user: User = Depends(current_user)):
 
 @app.post("/api/issues/restore")
 def restore_issue(body: IssueKey, user: User = Depends(current_user)):
-    with db.tx() as con:
+    with tx_for(user) as con:
         con.execute("DELETE FROM dismissed_issues WHERE username=? AND key=?", (user.username, body.key))
         after = planner.evaluate(con, user.username)
     return {"issues": after["issues"], "dismissed": after["dismissed"]}
@@ -783,7 +795,7 @@ def api_search(q: str = Query(default="", max_length=200), subject: str | None =
         tags = catalog.subject_tags(check_key(subject)) if subject not in ("tok", "ee", "cas") else [subject]
     cols = [collection] if collection and re.fullmatch(r"[a-z_]{2,30}", collection) else None
     kinds = [kind] if kind and re.fullmatch(r"[a-z_]{2,30}", kind) else None
-    with db.ro() as con:
+    with ro_for(user) as con:
         out = search.search(con, q, subject_tags=tags, collections=cols, kinds=kinds, level=level if level in ("HL", "SL") else None, year_from=year_from, year_to=year_to,
                             english_only=not all_languages, syllabus="current" if current_only else None, limit=30, offset=offset)
         ids = [r["id"] for r in out["results"]]
@@ -798,14 +810,14 @@ def api_search(q: str = Query(default="", max_length=200), subject: str | None =
 
 @app.get("/api/library/overview")
 def library_overview(user: User = Depends(current_user)):
-    with db.ro() as con:
-        counts = db.rows(con, "SELECT collection, COUNT(*) n FROM resources GROUP BY collection ORDER BY n DESC")
+    with ro_for(user) as con:
+        counts = db.rows(con, "SELECT collection, COUNT(*) n FROM resources r WHERE visible(r.path) GROUP BY collection ORDER BY n DESC")
         general = search.general_docs(con)
         core = {}
         for key in ("tok", "ee"):
-            core[key] = [search.public(r) for r in db.rows(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.subject=? AND (r.lang IS NULL OR r.lang='en') ORDER BY r.collection, r.kind, r.title LIMIT 400", (key,))]
+            core[key] = [search.public(r) for r in db.rows(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.subject=? AND visible(r.path) AND (r.lang IS NULL OR r.lang='en') ORDER BY r.collection, r.kind, r.title LIMIT 400", (key,))]
         saved = [search.public(r) for r in db.rows(con, f"""SELECT {search.RES_COLS}, m.status AS mark FROM resource_marks m JOIN resources r ON r.id=m.resource_id
-                                                           WHERE m.username=? ORDER BY m.updated_at DESC LIMIT 100""", (user.username,))]
+                                                           WHERE m.username=? AND visible(r.path) ORDER BY m.updated_at DESC LIMIT 100""", (user.username,))]
     return {"counts": counts, "general": general, "core": core, "saved": saved, "index": indexer.status()}
 
 
@@ -817,8 +829,8 @@ def resources_by_id(ids: str = Query(max_length=400), user: User = Depends(curre
         raise HTTPException(422, "Bad ids")
     if not id_list:
         return {"resources": []}
-    with db.ro() as con:
-        rows = db.rows(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.id IN ({','.join('?' * len(id_list))})", id_list)
+    with ro_for(user) as con:
+        rows = db.rows(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.id IN ({','.join('?' * len(id_list))}) AND visible(r.path)", id_list)
     return {"resources": [search.public(r) for r in rows]}
 
 
@@ -828,8 +840,8 @@ class MarkIn(BaseModel):
 
 @app.post("/api/resources/{rid}/mark")
 def mark_resource(rid: int, body: MarkIn, user: User = Depends(current_user)):
-    with db.tx() as con:
-        if not con.execute("SELECT 1 FROM resources WHERE id=?", (rid,)).fetchone():
+    with tx_for(user) as con:
+        if not con.execute("SELECT 1 FROM resources r WHERE id=? AND visible(r.path)", (rid,)).fetchone():
             raise HTTPException(404, "Unknown resource")
         if body.status == "none":
             con.execute("DELETE FROM resource_marks WHERE username=? AND resource_id=?", (user.username, rid))
@@ -841,8 +853,8 @@ def mark_resource(rid: int, body: MarkIn, user: User = Depends(current_user)):
 
 @app.get("/api/files/{rid}/open")
 def open_file(rid: int, user: User = Depends(current_user)):
-    with db.ro() as con:
-        r = db.one(con, "SELECT id, path, ext, url_kind, title FROM resources WHERE id=?", (rid,))
+    with ro_for(user) as con:
+        r = db.one(con, "SELECT id, path, ext, url_kind, title FROM resources r WHERE id=? AND visible(r.path)", (rid,))
     if not r:
         raise HTTPException(404, "File not found")
     ext_url = search.external_url(r)
@@ -863,262 +875,24 @@ def open_file(rid: int, user: User = Depends(current_user)):
     return FileResponse(full, media_type="application/octet-stream", filename=name, content_disposition_type="attachment", headers=headers)
 
 
+@app.get("/api/apps")
+def list_apps(request: Request, user: User = Depends(current_user)):
+    return {"apps": apps.for_user(user.username, request.headers.get("cookie", ""))}
+
+
 @app.get("/api/techniques")
 def techniques(user: User = Depends(current_user)):
     return {"techniques": TECHNIQUES, "bands": {str(k): {"title": v["title"], "focus": v["focus"], "actions": v["actions"], "mix": v["mix"]} for k, v in GRADE_BANDS.items()}, "families": FAMILY_TIPS}
-
-
-# ───────────────────────── coach ─────────────────────────
-class ChatIn(BaseModel):
-    message: str = Field(min_length=1, max_length=2000)
-
-
-@app.get("/api/coach/chats")
-def list_chats(user: User = Depends(current_user)):
-    with db.ro() as con:
-        return {"chats": db.rows(con, "SELECT id, title, updated_at FROM chats WHERE username=? ORDER BY updated_at DESC LIMIT 50", (user.username,)), "llm": llm.info()}
-
-
-@app.post("/api/coach/chats")
-def new_chat(user: User = Depends(current_user)):
-    with db.tx() as con:
-        if con.execute("SELECT COUNT(*) FROM chats WHERE username=?", (user.username,)).fetchone()[0] >= 200:
-            old = con.execute("SELECT id FROM chats WHERE username=? ORDER BY updated_at LIMIT 1", (user.username,)).fetchone()
-            con.execute("DELETE FROM chats WHERE id=?", (old[0],))
-        cur = con.execute("INSERT INTO chats(username, title, created_at, updated_at) VALUES(?,?,?,?)", (user.username, "New conversation", now_iso(), now_iso()))
-        return {"id": cur.lastrowid, "title": "New conversation"}
-
-
-def _chat(con, username: str, cid: int) -> dict:
-    c = db.one(con, "SELECT * FROM chats WHERE id=? AND username=?", (cid, username))
-    if not c:
-        raise HTTPException(404, "Conversation not found")
-    return c
-
-
-@app.get("/api/coach/chats/{cid}")
-def get_chat(cid: int, user: User = Depends(current_user)):
-    with db.ro() as con:
-        c = _chat(con, user.username, cid)
-        msgs = db.rows(con, "SELECT id, role, content, sources, created_at FROM chat_messages WHERE chat_id=? ORDER BY id", (cid,))
-    for m in msgs:
-        m["sources"] = json.loads(m["sources"] or "[]")
-    return {"id": c["id"], "title": c["title"], "messages": msgs}
-
-
-@app.delete("/api/coach/chats/{cid}")
-def delete_chat(cid: int, user: User = Depends(current_user)):
-    with db.tx() as con:
-        _chat(con, user.username, cid)
-        con.execute("DELETE FROM chats WHERE id=?", (cid,))
-    return {"ok": True}
-
-
-_coach_active: dict[str, float] = {}
-_coach_lock = threading.Lock()
-COACH_MAX_WAITING = 6
-
-
-def _sse(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-
-
-@app.post("/api/coach/chats/{cid}/messages")
-def post_message(cid: int, body: ChatIn, user: User = Depends(current_user)):
-    question = _clean_text(body.message, 2000) or ""
-    if not question:
-        raise HTTPException(422, "Empty message")
-    with db.ro() as con:
-        _chat(con, user.username, cid)
-    with _coach_lock:
-        now = time.time()
-        if now - _coach_active.get(user.username, 0) < 900:
-            raise HTTPException(429, "Your previous question is still being answered. Wait for it to finish.")
-        if llm.info()["waiting"] >= COACH_MAX_WAITING and not coach.is_crisis(question):
-            raise HTTPException(429, "The coach is very busy right now. Please try again in a few minutes.")
-        _coach_active[user.username] = now
-    try:
-        auth.rate_limit(user.username, "coach", config.RATE_COACH_PER_HOUR, 3600)
-    except HTTPException:
-        _coach_active.pop(user.username, None)
-        raise
-    try:
-        with db.tx() as con:
-            c = _chat(con, user.username, cid)
-            history = db.rows(con, "SELECT role, content FROM chat_messages WHERE chat_id=? ORDER BY id DESC LIMIT 6", (cid,))[::-1]
-            messages, sources = coach.build(con, user.username, question, history)
-            con.execute("INSERT INTO chat_messages(chat_id, role, content, sources, created_at) VALUES(?,?,?,?,?)", (cid, "user", question, "[]", now_iso()))
-            if c["title"] == "New conversation":
-                con.execute("UPDATE chats SET title=? WHERE id=?", (question[:60], cid))
-            con.execute("UPDATE chats SET updated_at=? WHERE id=?", (now_iso(), cid))
-    except Exception:
-        _coach_active.pop(user.username, None)
-        raise
-
-    def gen():
-        parts: list[str] = []
-        try:
-            if coach.is_crisis(question):
-                parts.append(coach.CRISIS_REPLY)
-                yield _sse("sources", {"sources": []})
-                yield _sse("token", {"text": coach.CRISIS_REPLY})
-                yield _sse("done", {"fixed": True})
-                return
-            yield _sse("sources", {"sources": sources})
-            if not llm.available():
-                text = coach.fallback_answer(question, sources)
-                parts.append(text)
-                yield _sse("token", {"text": text})
-                yield _sse("done", {"fallback": True})
-                return
-            for ev in llm.stream(messages, max_tokens=640, temperature=0.4):
-                if "wait" in ev:
-                    yield _sse("wait", {"ahead": max(0, ev["wait"] - 1)})
-                elif "text" in ev:
-                    parts.append(ev["text"])
-                    yield _sse("token", {"text": ev["text"]})
-                elif "done" in ev:
-                    if ev["done"].get("finish") == "length":
-                        tail = "\n\n(I stopped here to keep this short. Say \"continue\" if you want the rest.)"
-                        parts.append(tail)
-                        yield _sse("token", {"text": tail})
-                    yield _sse("done", ev["done"])
-        except llm.Busy:
-            yield _sse("error", {"detail": "The AI is busy with other requests. Please try again in a few minutes."})
-        except GeneratorExit:
-            raise
-        except Exception:
-            log.exception("coach stream failed")
-            if not parts:
-                text = coach.fallback_answer(question, sources)
-                parts.append(text)
-                yield _sse("token", {"text": text})
-            yield _sse("done", {"fallback": True})
-        finally:
-            _coach_active.pop(user.username, None)
-            text = "".join(parts).strip()
-            if text:
-                shown = [] if coach.is_crisis(question) else sources
-                with db.tx() as con2:
-                    con2.execute("INSERT INTO chat_messages(chat_id, role, content, sources, created_at) VALUES(?,?,?,?,?)", (cid, "assistant", text[:12000], json.dumps(shown), now_iso()))
-
-    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
-
-
-# ───────────────────────── feedback writer ─────────────────────────
-@app.get("/api/feedback/rubrics")
-def rubrics(user: User = Depends(current_user)):
-    return {"rubrics": [{"key": k, "name": v["name"], "words": v["words"], "total": v["total"], "applies": v["applies"],
-                         "criteria": [{"code": c[0], "name": c[1], "marks": c[2], "descriptor": c[3]} for c in v["criteria"]]} for k, v in RUBRICS.items()],
-            "llm": llm.info(), "max_words": config.MAX_FEEDBACK_WORDS, "per_day": config.RATE_FEEDBACK_PER_DAY}
-
-
-@app.post("/api/feedback/extract")
-async def extract_upload(file: UploadFile = File(...), user: User = Depends(current_user)):
-    auth.rate_limit(user.username, "extract", 30, 3600)
-    name = (file.filename or "upload").lower()
-    ext = name.rsplit(".", 1)[-1] if "." in name else ""
-    if ext not in ("pdf", "docx", "txt"):
-        raise HTTPException(415, "Upload a PDF, DOCX or TXT file")
-    data = await file.read(config.MAX_UPLOAD_BYTES + 1)
-    if len(data) > config.MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"File is larger than {config.MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
-    if (ext == "pdf" and not data.startswith(b"%PDF")) or (ext == "docx" and not data.startswith(b"PK")):
-        raise HTTPException(415, "The file does not look like a valid " + ext.upper())
-    fd, tmp = tempfile.mkstemp(suffix="." + ext, prefix="ibgod-upload-")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        from starlette.concurrency import run_in_threadpool
-        text = await run_in_threadpool(indexer.extract_document, Path(tmp), ext)
-    except Exception:
-        raise HTTPException(422, "Could not read text from this file. Try pasting the text instead.")
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-    if len(text.strip()) < 50:
-        raise HTTPException(422, "No text found. If this is a scanned document, paste the text instead.")
-    return {"text": text[:200000], "words": feedback.word_count(text)}
-
-
-class FeedbackIn(BaseModel):
-    rubric: str = Field(max_length=40)
-    title: str = Field(min_length=1, max_length=160)
-    text: str = Field(min_length=200, max_length=200000)
-    subject: str | None = Field(default=None, max_length=80)
-
-
-def _job_public(j: dict, full: bool = False) -> dict:
-    out = {"id": j["id"], "rubric": j["rubric"], "rubric_name": RUBRICS.get(j["rubric"], {}).get("name", j["rubric"]), "title": j["title"], "words": j["words"], "status": j["status"],
-           "progress": j["progress"], "created_at": j["created_at"], "finished_at": j["finished_at"], "subject": j["subject"]}
-    if full:
-        out["result"] = json.loads(j["result"]) if j["result"] else None
-        out["text"] = j["body"]
-    return out
-
-
-@app.post("/api/feedback/jobs")
-def create_feedback(body: FeedbackIn, user: User = Depends(current_user)):
-    if body.rubric not in RUBRICS:
-        raise HTTPException(422, "Unknown rubric")
-    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", body.text).strip()
-    if feedback.word_count(text) < 80:
-        raise HTTPException(422, "Paste at least a few paragraphs of your work")
-    with db.ro() as con:
-        active = con.execute("SELECT COUNT(*) FROM feedback_jobs WHERE username=? AND status IN ('queued','running')", (user.username,)).fetchone()[0]
-    if active >= 2:
-        raise HTTPException(429, "You already have feedback in progress. Wait for it to finish first.")
-    auth.rate_limit(user.username, "feedback", config.RATE_FEEDBACK_PER_DAY, 86400)
-    with db.tx() as con:
-        con.execute("DELETE FROM feedback_jobs WHERE username=? AND status IN ('done','error') AND id NOT IN (SELECT id FROM feedback_jobs WHERE username=? ORDER BY id DESC LIMIT 40)",
-                    (user.username, user.username))
-    jid = feedback.create_job(user.username, body.rubric, body.subject if body.subject and SUBJECT_KEY.match(body.subject) else None, _clean_text(body.title, 160) or "Untitled", text)
-    return {"id": jid}
-
-
-@app.get("/api/feedback/jobs")
-def list_feedback(user: User = Depends(current_user)):
-    with db.ro() as con:
-        jobs = db.rows(con, "SELECT * FROM feedback_jobs WHERE username=? ORDER BY id DESC LIMIT 40", (user.username,))
-        ahead = con.execute("SELECT COUNT(*) FROM feedback_jobs WHERE status IN ('queued','running')").fetchone()[0]
-    return {"jobs": [_job_public(j) for j in jobs], "queue": ahead, "llm": llm.info()}
-
-
-@app.get("/api/feedback/jobs/{jid}")
-def get_feedback(jid: int, user: User = Depends(current_user)):
-    with db.ro() as con:
-        j = db.one(con, "SELECT * FROM feedback_jobs WHERE id=? AND username=?", (jid, user.username))
-        if not j:
-            raise HTTPException(404, "Not found")
-        ahead = con.execute("SELECT COUNT(*) FROM feedback_jobs WHERE status IN ('queued','running') AND id<?", (jid,)).fetchone()[0]
-    out = _job_public(j, full=True)
-    out["ahead"] = ahead
-    return out
-
-
-@app.delete("/api/feedback/jobs/{jid}")
-def delete_feedback(jid: int, user: User = Depends(current_user)):
-    with db.tx() as con:
-        j = db.one(con, "SELECT status FROM feedback_jobs WHERE id=? AND username=?", (jid, user.username))
-        if not j:
-            raise HTTPException(404, "Not found")
-        if j["status"] == "running":
-            raise HTTPException(409, "This feedback is being written right now. Delete it when it has finished.")
-        con.execute("DELETE FROM feedback_jobs WHERE id=?", (jid,))
-    return {"ok": True}
 
 
 # ───────────────────────── account data ─────────────────────────
 @app.get("/api/export")
 def export(user: User = Depends(current_user)):
     out: dict = {"exported_at": now_iso(), "username": user.username}
-    with db.ro() as con:
+    with ro_for(user) as con:
         out["profile"] = db.one(con, "SELECT username, display_name, email, created_at, settings FROM users WHERE username=?", (user.username,))
-        for table in ("user_subjects", "topic_state", "tasks", "day_overrides", "dismissed_issues", "grade_log", "paper_attempts", "resource_marks", "chats", "feedback_jobs"):
+        for table in ("user_subjects", "topic_state", "tasks", "day_overrides", "dismissed_issues", "grade_log", "paper_attempts", "resource_marks"):
             out[table] = db.rows(con, f"SELECT * FROM {table} WHERE username=?", (user.username,))
-        out["chat_messages"] = db.rows(con, "SELECT m.* FROM chat_messages m JOIN chats c ON c.id=m.chat_id WHERE c.username=?", (user.username,))
     return JSONResponse(out, headers={"Content-Disposition": f'attachment; filename="ibgod-{user.username}.json"'})
 
 
@@ -1128,7 +902,7 @@ class ConfirmIn(BaseModel):
 
 @app.post("/api/account/delete")
 def delete_account(body: ConfirmIn, user: User = Depends(current_user)):
-    with db.tx() as con:
+    with tx_for(user) as con:
         con.execute("DELETE FROM users WHERE username=?", (user.username,))
         con.execute("DELETE FROM usage_log WHERE username=?", (user.username,))
         con.execute("DELETE FROM meta WHERE key=?", (f"plan:{user.username}",))
@@ -1145,14 +919,12 @@ def admin(user: User = Depends(current_user)) -> User:
 
 @app.get("/api/admin/status")
 def admin_status(user: User = Depends(admin)):
-    with db.ro() as con:
+    with ro_for(user) as con:
         by_coll = db.rows(con, "SELECT collection, COUNT(*) files, SUM(text_status='done') indexed, SUM(text_status='pending') pending, SUM(text_status='error') errors FROM resources GROUP BY collection ORDER BY files DESC")
         users = db.rows(con, "SELECT username, display_name, onboarded, last_seen, (SELECT COUNT(*) FROM user_subjects s WHERE s.username=u.username) subjects FROM users u ORDER BY last_seen DESC LIMIT 200")
         last = db.get_meta(con, "last_scan", None)
         size = os.path.getsize(config.DB_PATH) if config.DB_PATH.exists() else 0
-        jobs = con.execute("SELECT COUNT(*) FROM feedback_jobs WHERE status IN ('queued','running')").fetchone()[0]
-    return {"index": indexer.status(), "collections": by_coll, "users": users, "last_scan": last, "db_bytes": size, "llm": llm.info(), "feedback_queue": jobs,
-            "excluded": sorted(config.EXCLUDE_TOP)}
+    return {"index": indexer.status(), "collections": by_coll, "users": users, "last_scan": last, "db_bytes": size, "excluded": sorted(config.EXCLUDE_TOP), "access": access.status()}
 
 
 @app.post("/api/admin/rescan")

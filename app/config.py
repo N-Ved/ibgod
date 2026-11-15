@@ -31,16 +31,18 @@ PUBLIC_HOSTS = set(_list("IBGOD_PUBLIC_HOSTS", "ibgod.n-ved.com"))
 # Development only: a fixed user when no proxy is present. Never set in the deployed container.
 DEV_USER = os.environ.get("IBGOD_DEV_USER", "")
 
-LLM_URL = os.environ.get("IBGOD_LLM_URL", "http://llm:8080").rstrip("/")
-LLM_CTX = int(os.environ.get("IBGOD_LLM_CTX", "12288"))
-LLM_ENABLED = os.environ.get("IBGOD_LLM_ENABLED", "1") == "1"
 
 INDEX_WORKERS = int(os.environ.get("IBGOD_INDEX_WORKERS", "2"))
 AUTO_INDEX = os.environ.get("IBGOD_AUTO_INDEX", "1") == "1"
-FEEDBACK_WORKER = os.environ.get("IBGOD_FEEDBACK_WORKER", "1") == "1"  # off only for a second test instance sharing the database
-MAX_UPLOAD_BYTES = int(os.environ.get("IBGOD_MAX_UPLOAD_MB", "20")) * 1024 * 1024
-MAX_FEEDBACK_WORDS = int(os.environ.get("IBGOD_MAX_FEEDBACK_WORDS", "6500"))
+BACKGROUND_JOBS = os.environ.get("IBGOD_BACKGROUND_JOBS", "1") == "1"  # off only for a second test instance sharing the database
 
-# Per-user hourly limits for the expensive endpoints.
-RATE_COACH_PER_HOUR = int(os.environ.get("IBGOD_RATE_COACH", "40"))
-RATE_FEEDBACK_PER_DAY = int(os.environ.get("IBGOD_RATE_FEEDBACK", "8"))
+
+# FileBrowser's own database (mounted read-only). Its users, groups and access rules decide what each person can see here.
+FB_DB = os.environ.get("IBGOD_FB_DB", "/filebrowser/database.sqlite")
+FB_SOURCE = os.environ.get("IBGOD_FB_SOURCE", "/srv/docs")  # FileBrowser's path for the same folder that is mounted here at /library
+# Mirrors FileBrowser's config.yaml for people who have not opened FileBrowser yet (FileBrowser creates their account on first visit).
+FB_DEFAULT_SCOPE = os.environ.get("IBGOD_FB_DEFAULT_SCOPE", "/")
+FB_DEFAULT_VIEW = os.environ.get("IBGOD_FB_DEFAULT_VIEW", "1") == "1"
+FB_DENY_BY_DEFAULT = os.environ.get("IBGOD_FB_DENY_BY_DEFAULT", "0") == "1"
+# Services shown on the Apps page: JSON list of {name, url, description, icon, groups}. Empty groups = every signed-in user.
+APPS_FILE = os.environ.get("IBGOD_APPS_FILE", str(Path(__file__).resolve().parent / "apps.json"))

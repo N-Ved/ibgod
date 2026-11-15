@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from . import catalog, db
+from . import access, catalog, db
 from .knowledge import GRADE_BANDS
 
 KIND_ORDER = {"review": 0, "learn": 1, "practice": 2, "mixed": 3, "paper": 4, "paper_review": 5, "coursework": 6, "final": 7, "custom": 8}
@@ -125,7 +125,7 @@ def _paper_sittings(con: sqlite3.Connection, username: str, sub: dict) -> dict[s
     lang_sql = "" if s.get("family") in ("lang_a", "lang_b") else " AND (r.lang IS NULL OR r.lang='en')"
     rows = db.rows(con, f"""SELECT r.id, r.kind, r.paper, r.year, r.session, r.tz, r.syllabus, r.pair_id, r.title, r.collection FROM resources r
                             WHERE r.subject IN ({ph}) AND r.collection IN ('past_papers','specimen','mocks') AND r.kind IN ('question_paper','booklet','audio')
-                            AND r.paper IS NOT NULL AND (r.level IS NULL OR r.level IN (?, 'HLSL')){lang_sql}""", (*tags, sub["level"]))
+                            AND r.paper IS NOT NULL AND visible(r.path) AND (r.level IS NULL OR r.level IN (?, 'HLSL')){lang_sql}""", (*tags, sub["level"]))
     tried = {r["resource_id"] for r in db.rows(con, "SELECT DISTINCT resource_id FROM paper_attempts WHERE username=?", (username,))}
     groups: dict[tuple, dict] = {}
     for r in rows:
@@ -435,6 +435,7 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
 def generate(con: sqlite3.Connection, username: str, today: date | None = None, keep_pinned: bool = True) -> dict:
     """(Re)build the plan from today. Completed work and pinned/manual tasks are kept; everything else is rescheduled."""
     today = today or today_local()
+    access.bind(con, username)  # only papers this user may open are scheduled
     profile = load_profile(con, username)
     subs = profile["subjects"]
     start = max(today, parse_date(profile["settings"].get("start_date")) or today)

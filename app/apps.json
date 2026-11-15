@@ -1,0 +1,8 @@
+[
+  {"key": "files", "name": "Files", "description": "Browse and download everything on the study drive.", "url": "https://docs.n-ved.com/", "host": "docs.n-ved.com", "probe": "/n-ved/open-html.js", "icon": "folder", "color": "#2b7fd9", "filebrowser": true},
+  {"key": "pestle", "name": "Mortar & Pestle", "description": "Practise IB exam-style questions and build topic tests.", "url": "https://pestle.n-ved.com/", "host": "pestle.n-ved.com", "probe": "/", "icon": "flask", "color": "#0ea5a0"},
+  {"key": "village", "name": "Village", "description": "Archive of Revision Village resources.", "url": "https://village.n-ved.com/", "host": "village.n-ved.com", "probe": "/", "icon": "map", "color": "#e0792b"},
+  {"key": "dojo", "name": "Dojo", "description": "RevisionDojo notes and cheat sheets.", "url": "https://dojo.n-ved.com/", "host": "dojo.n-ved.com", "probe": "/", "icon": "book", "color": "#d1345b"},
+  {"key": "ldap", "name": "User admin", "description": "Create accounts, reset passwords and manage groups.", "url": "https://ldap.n-ved.com/", "host": "ldap.n-ved.com", "probe": "/", "icon": "users", "color": "#5d6478"},
+  {"key": "account", "name": "Sign-in & security", "description": "Your password and two-factor devices.", "url": "https://auth.n-ved.com/settings", "icon": "shield", "color": "#7c3aed", "always": true}
+]

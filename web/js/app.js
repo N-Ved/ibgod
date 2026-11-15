@@ -6,8 +6,8 @@ import { Today } from './today.js';
 import { Plan } from './plan.js';
 import { Subjects, SubjectPage } from './subjects.js';
 import { Library } from './library.js';
-import { Coach, Techniques } from './coach.js';
-import { Feedback } from './feedback.js';
+import { Techniques } from './techniques.js';
+import { Apps } from './apps.js';
 import { Settings } from './settings.js';
 
 const NAV = [
@@ -15,9 +15,8 @@ const NAV = [
   { path: 'plan', label: 'Plan', icon: 'calendar' },
   { path: 'subjects', label: 'Subjects', icon: 'target' },
   { path: 'library', label: 'Library', icon: 'layers' },
-  { path: 'coach', label: 'Coach', icon: 'chat' },
   { path: 'techniques', label: 'Study methods', icon: 'bulb' },
-  { path: 'feedback', label: 'Feedback writer', icon: 'pen' },
+  { path: 'apps', label: 'Apps', icon: 'grid' },
   { path: 'settings', label: 'Settings', icon: 'settings' },
 ];
 const TABS = ['today', 'plan', 'subjects', 'library', 'more'];
@@ -57,7 +56,6 @@ function More() {
   return html`<div class="page">
     <div class="page-head"><div><h1>More</h1></div></div>
     <div class="card pad0">${NAV.slice(4).map((n) => html`<a class="nav-item" href=${'#/' + n.path}><${Icon} name=${n.icon} /> ${n.label}</a>`)}
-      <a class="nav-item" href=${me.links.docs} target="_blank" rel="noopener"><${Icon} name="file" /> File browser</a>
       <a class="nav-item" href=${me.links.logout}><${Icon} name="logout" /> Sign out</a>
     </div>
     <div class="hint center">Signed in as ${me.display_name} (${me.username})</div>
@@ -100,9 +98,8 @@ function Shell() {
       : p === 'plan' ? html`<${Plan} query=${route.query} />`
       : p === 'subjects' ? (route.parts[1] ? html`<${SubjectPage} key=${route.parts[1]} subjectKey=${route.parts[1]} tab=${route.parts[2]} />` : html`<${Subjects} />`)
       : p === 'library' ? html`<${Library} query=${route.query} />`
-      : p === 'coach' ? html`<${Coach} />`
       : p === 'techniques' ? html`<${Techniques} focus=${route.parts[1]} />`
-      : p === 'feedback' ? html`<${Feedback} jobId=${route.parts[1]} />`
+      : p === 'apps' ? html`<${Apps} />`
       : p === 'settings' ? html`<${Settings} />`
       : p === 'more' ? html`<${More} />`
       : html`<div class="page"><div class="empty"><h3>Page not found</h3><a href="#/today">Back to today</a></div></div>`;
@@ -115,7 +112,7 @@ function Shell() {
       ${NAV.map((n) => html`<a class=${'nav-item' + (active === n.path ? ' active' : '')} href=${'#/' + n.path}><${Icon} name=${n.icon} /> ${n.label}${n.path === 'plan' && issueCount ? html`<span class="badge">${issueCount}</span>` : null}</a>`)}
       <div class="nav-foot">
         <div class="ellipsis">${me.display_name}</div>
-        <a href=${me.links.docs} target="_blank" rel="noopener">File browser</a> · <a href=${me.links.logout}>Sign out</a>
+        <a href="#/apps">All apps</a> · <a href=${me.links.logout}>Sign out</a>
       </div>
     </nav>
     <div>

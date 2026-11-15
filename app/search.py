@@ -62,7 +62,7 @@ def external_url(r: dict) -> str | None:
 
 def _filters(subject_tags: list[str] | None, collections: list[str] | None, kinds: list[str] | None, level: str | None, year_from: int | None,
              year_to: int | None, english_only: bool, syllabus: str | None) -> tuple[str, list]:
-    where, params = [], []
+    where, params = ["visible(r.path)"], []
     if subject_tags:
         where.append(f"r.subject IN ({','.join('?' * len(subject_tags))})")
         params += subject_tags
@@ -136,40 +136,6 @@ def search(con: sqlite3.Connection, q: str, *, subject_tags: list[str] | None = 
     return {"results": results, "query": q}
 
 
-def passages(con: sqlite3.Connection, q: str, subject_tags: list[str] | None, collections: list[str] | None = None, limit: int = 4, max_chars: int = 900) -> list[dict]:
-    """Short text passages for grounding the AI coach. OR-matching, best pages first, one per file."""
-    expr = fts_query(q, "or")
-    if not expr:
-        return []
-    tagq = ""
-    if subject_tags:
-        tagq = "stag:(" + " OR ".join(catalog.stag(t) for t in subject_tags) + ") AND "
-    if collections:
-        tagq += "ctag:(" + " OR ".join(catalog.ctag(c) for c in collections) + ") AND "
-    try:
-        rows = db.rows(con, f"""SELECT {RES_COLS}, c.page AS page, c.text AS text, c.rank AS score FROM chunks c JOIN resources r ON r.id=c.resource_id
-                                WHERE chunks MATCH ? AND (r.lang IS NULL OR r.lang='en') AND COALESCE(r.syllabus,'current')='current'
-                                ORDER BY c.rank LIMIT ?""", (f"{tagq}text:({expr})", limit * 5))
-    except sqlite3.OperationalError:
-        return []
-    out, seen = [], set()
-    terms = [t for t in _TOKEN.findall(q.lower()) if t not in _STOP and len(t) > 2]
-    for r in rows:
-        if r["id"] in seen:
-            continue
-        seen.add(r["id"])
-        text = r.pop("text")
-        low = text.lower()
-        pos = min((low.find(t) for t in terms if low.find(t) >= 0), default=0)
-        start = max(0, pos - max_chars // 3)
-        pub = public(r)
-        pub["text"] = ("…" if start else "") + text[start:start + max_chars].strip() + ("…" if start + max_chars < len(text) else "")
-        out.append(pub)
-        if len(out) >= limit:
-            break
-    return out
-
-
 def topic_resources(con: sqlite3.Connection, subject_key: str, level: str, topic: dict, textbook_id: int | None = None, per_kind: int = 4) -> dict:
     """Everything in the library that helps with one syllabus topic, grouped by what it is for."""
     tags = catalog.subject_tags(subject_key)
@@ -181,7 +147,7 @@ def topic_resources(con: sqlite3.Connection, subject_key: str, level: str, topic
     code_variants = list({code, code.replace(".", ""), code.split(".")[0] + "." + code.split(".")[1] if "." in code else code})
     cph = ",".join("?" * len(code_variants))
     for coll, key in (("notes", "notes"), ("videos", "videos")):
-        out[key] = [public(r) for r in db.rows(con, f"""SELECT {RES_COLS} FROM resources r WHERE r.subject IN ({ph}) AND r.collection=? AND r.topic_code IN ({cph}) AND {lv}
+        out[key] = [public(r) for r in db.rows(con, f"""SELECT {RES_COLS} FROM resources r WHERE r.subject IN ({ph}) AND r.collection=? AND r.topic_code IN ({cph}) AND {lv} AND visible(r.path)
                                                          AND COALESCE(r.syllabus,'current')='current' ORDER BY (r.level=?) DESC, r.title LIMIT ?""",
                                                 (*tags, coll, *code_variants, level, level, per_kind))]
     # 2) Keyword matches in titles and text.
@@ -193,7 +159,7 @@ def topic_resources(con: sqlite3.Connection, subject_key: str, level: str, topic
             ksql = f" AND r.kind IN ({','.join('?' * len(kinds))})" if kinds else ""
             cur = " AND COALESCE(r.syllabus,'current')='current'" if cur_only else ""
             try:
-                return db.rows(con, f"""SELECT {RES_COLS} FROM res_fts JOIN resources r ON r.id=res_fts.rowid WHERE res_fts MATCH ? AND r.subject IN ({ph})
+                return db.rows(con, f"""SELECT {RES_COLS} FROM res_fts JOIN resources r ON r.id=res_fts.rowid WHERE res_fts MATCH ? AND visible(r.path) AND r.subject IN ({ph})
                                         AND r.collection IN ({cph_}){ksql}{cur} AND {lv} AND (r.lang IS NULL OR r.lang='en')
                                         ORDER BY bm25(res_fts, 8.0, 1.0) LIMIT ?""", (f"title:({title_expr})", *tags, *collections, *(kinds or []), level, n))
             except sqlite3.OperationalError:
@@ -210,14 +176,14 @@ def topic_resources(con: sqlite3.Connection, subject_key: str, level: str, topic
         text_expr = phrase_query(phrases)
         try:
             if textbook_id:
-                rng = db.one(con, "SELECT chunk_lo, chunk_hi FROM resources WHERE id=?", (textbook_id,))
+                rng = db.one(con, "SELECT chunk_lo, chunk_hi FROM resources r WHERE id=? AND visible(r.path)", (textbook_id,))
                 if rng and rng["chunk_lo"] is not None:
                     rows = db.rows(con, f"""SELECT {RES_COLS}, c.page AS page, snippet(chunks, 0, '[[', ']]', ' … ', 14) AS snippet FROM chunks c JOIN resources r ON r.id=c.resource_id
-                                            WHERE chunks MATCH ? AND c.rowid BETWEEN ? AND ? ORDER BY c.rank LIMIT 3""", (f"text:({text_expr})", rng["chunk_lo"], rng["chunk_hi"]))
+                                            WHERE chunks MATCH ? AND c.rowid BETWEEN ? AND ? AND visible(r.path) ORDER BY c.rank LIMIT 3""", (f"text:({text_expr})", rng["chunk_lo"], rng["chunk_hi"]))
                     out["textbook"] = [public(r) for r in sorted(rows, key=lambda x: x["page"] or 0)]
             if not out["textbook"]:
                 rows = db.rows(con, f"""SELECT {RES_COLS}, c.page AS page, snippet(chunks, 0, '[[', ']]', ' … ', 14) AS snippet FROM chunks c JOIN resources r ON r.id=c.resource_id
-                                        WHERE chunks MATCH ? AND r.kind IN ('textbook','revision_guide') AND COALESCE(r.syllabus,'current')='current' AND {lv}
+                                        WHERE chunks MATCH ? AND visible(r.path) AND r.kind IN ('textbook','revision_guide') AND COALESCE(r.syllabus,'current')='current' AND {lv}
                                         AND (r.lang IS NULL OR r.lang='en') ORDER BY c.rank LIMIT 12""", (f"{stag_q} AND ctag:cbooks AND text:({text_expr})", level))
                 seen: set[int] = set()
                 for r in rows:
@@ -238,8 +204,8 @@ def past_papers(con: sqlite3.Connection, subject_key: str, level: str, username:
     subj = catalog.get_subject(subject_key) or {}
     lang_sql = "" if (not english_only or subj.get("family") in ("lang_a", "lang_b")) else " AND (r.lang IS NULL OR r.lang='en')"
     leg = "" if include_legacy else " AND COALESCE(r.syllabus,'current')='current'"
-    rows = db.rows(con, f"""SELECT {RES_COLS}, m.title AS pair_title FROM resources r LEFT JOIN resources m ON m.id=r.pair_id
-                            WHERE r.subject IN ({ph}) AND r.collection IN ('past_papers','specimen','mocks') AND r.kind IN ('question_paper','booklet','audio')
+    rows = db.rows(con, f"""SELECT {RES_COLS}, m.title AS pair_title FROM resources r LEFT JOIN resources m ON m.id=r.pair_id AND visible(m.path)
+                            WHERE r.subject IN ({ph}) AND visible(r.path) AND r.collection IN ('past_papers','specimen','mocks') AND r.kind IN ('question_paper','booklet','audio')
                             AND (r.level IS NULL OR r.level IN (?, 'HLSL')){lang_sql}{leg}
                             ORDER BY CASE r.collection WHEN 'past_papers' THEN 0 WHEN 'mocks' THEN 1 ELSE 2 END, COALESCE(r.year, 0) DESC,
                                      CASE r.session WHEN 'November' THEN 0 WHEN 'May' THEN 1 ELSE 2 END, r.paper, r.tz, r.kind DESC, r.title""",
@@ -251,6 +217,8 @@ def past_papers(con: sqlite3.Connection, subject_key: str, level: str, username:
     out = []
     for r in rows:
         p = public(r)
+        if r["pair_id"] and r.get("pair_title") is None:
+            p["pair_id"] = None  # the markscheme exists but this user may not see it
         p["attempts"] = attempts.get(r["id"], [])
         out.append(p)
     return out
@@ -260,10 +228,10 @@ def subject_overview(con: sqlite3.Connection, subject_key: str, level: str) -> d
     """Counts and headline resources for a subject page."""
     tags = catalog.subject_tags(subject_key)
     ph = ",".join("?" * len(tags))
-    counts = {f"{r['collection']}/{r['kind']}": r["n"] for r in db.rows(con, f"SELECT collection, kind, COUNT(*) n FROM resources r WHERE r.subject IN ({ph}) GROUP BY 1,2", tags)}
+    counts = {f"{r['collection']}/{r['kind']}": r["n"] for r in db.rows(con, f"SELECT collection, kind, COUNT(*) n FROM resources r WHERE r.subject IN ({ph}) AND visible(r.path) GROUP BY 1,2", tags)}
 
     def top(where: str, params: tuple = (), n: int = 12, order: str = "COALESCE(r.syllabus,'current')='current' DESC, COALESCE(r.year,0) DESC, r.title") -> list[dict]:
-        return [public(r) for r in db.rows(con, f"SELECT {RES_COLS} FROM resources r WHERE r.subject IN ({ph}) AND {where} AND (r.lang IS NULL OR r.lang='en') ORDER BY {order} LIMIT ?",
+        return [public(r) for r in db.rows(con, f"SELECT {RES_COLS} FROM resources r WHERE r.subject IN ({ph}) AND visible(r.path) AND {where} AND (r.lang IS NULL OR r.lang='en') ORDER BY {order} LIMIT ?",
                                            (*tags, *params, n))]
     lv = "(r.level IS NULL OR r.level IN (?, 'HLSL'))"
     return {
@@ -283,6 +251,6 @@ def subject_overview(con: sqlite3.Connection, subject_key: str, level: str) -> d
 def general_docs(con: sqlite3.Connection) -> dict:
     """Programme-wide documents every student needs."""
     def q(kind: str, n: int = 6) -> list[dict]:
-        return [public(r) for r in db.rows(con, f"SELECT {RES_COLS} FROM resources r WHERE r.kind=? AND (r.lang IS NULL OR r.lang='en') ORDER BY COALESCE(r.year,0) DESC, r.title LIMIT ?", (kind, n))]
+        return [public(r) for r in db.rows(con, f"SELECT {RES_COLS} FROM resources r WHERE r.kind=? AND visible(r.path) AND (r.lang IS NULL OR r.lang='en') ORDER BY COALESCE(r.year,0) DESC, r.title LIMIT ?", (kind, n))]
     return {"grade_boundaries": q("grade_boundaries", 8), "exam_schedules": q("exam_schedule", 6), "grade_descriptors": q("grade_descriptors", 3),
             "calculator_rules": q("calculator_rules", 2), "exam_conduct": q("exam_conduct", 3)}

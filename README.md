@@ -4,16 +4,14 @@ A personal study planner for IB Diploma students that sits on top of the materia
 Students pick their subjects, levels, current and target grades, textbooks and available time; the app builds a
 study plan to exam day, links every session to the right notes, textbook pages, question-bank sections, videos and
 past papers on the drive, checks every change to the schedule for problems, and can be re-planned at any time.
-A small AI model running on this machine powers a study coach and a feedback writer for IAs, the EE and TOK work.
-
-Everything runs on this server. Nothing is sent to outside services.
+It has no AI features (an earlier coach and feedback writer were removed). Everything runs on this server.
 
 ## How it fits into the server
 
 ```
-Internet -> Cloudflare tunnel -> Caddy -> Authelia (2FA) -> ibgod:8080 -> ibgod-llm:8080 (internal only)
-                                                              |
-                                                   /mnt/files/docs (read-only)
+Internet -> Cloudflare tunnel -> Caddy -> Authelia (2FA) -> ibgod:8080
+                                                              |-- /mnt/files/docs (read-only)
+                                                              '-- /opt/fileserver/filebrowser-data (read-only: FileBrowser's access rules)
 ```
 
 - Separate compose project in this folder. It never rebuilds or restarts the `fileserver` stack.
@@ -22,12 +20,10 @@ Internet -> Cloudflare tunnel -> Caddy -> Authelia (2FA) -> ibgod:8080 -> ibgod-
   connection comes from Caddy's address**, so no other container can impersonate a user. A new Authelia user who
   opens the site is taken straight to the setup page. Members of `lldap_admin` (and the user `admin`) see a server
   panel in Settings.
-- The AI model container can talk to nothing except the app (internal network, no internet).
 
 | Container   | Image                              | Purpose                                              |
 |-------------|------------------------------------|------------------------------------------------------|
 | `ibgod`     | built from this folder             | web app, API, library index, planner                 |
-| `ibgod-llm` | llama.cpp server (pinned digest)   | Qwen3.5-4B (Apache-2.0), CPU only, one request at a time |
 
 ## Everyday commands
 
@@ -60,7 +56,6 @@ subdomain `ibgod`, domain `n-ved.com`, service `HTTP`, URL `caddy:80`.
 | What                          | Where                                   | Notes                                              |
 |-------------------------------|-----------------------------------------|----------------------------------------------------|
 | Student plans, grades, chats, drafts and the library index | `data/ibgod.db` (SQLite, ~3 GB) | owner-only permissions. Back this file up. |
-| AI model                      | `models/Qwen3.5-4B-Q4_K_M.gguf` (2.7 GB)| sha256 `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4` |
 | Study material                | `/mnt/files/docs`                       | mounted read-only; the app cannot change it        |
 
 The app writes a small daily snapshot of everything students created (not the index) to `data/backups/students-YYYYMMDD.sqlite`
@@ -77,11 +72,34 @@ The library index is derived data: if the database is lost, students' plans are 
 - Only study material is indexed (about 52,000 of 177,000 files; site assets and individual question pages are skipped).
 - Never indexed or served: top-level folders listed in `IBGOD_EXCLUDE_TOP` (default `lost+found,Shaffy`). Under `home/`
   only `SaveMyExams - Notes` is indexed.
-- **FileBrowser's per-user access rules do not apply here.** Every signed-in user can open every indexed file. Keep
-  private folders in `IBGOD_EXCLUDE_TOP`.
+- **FileBrowser's access rules apply here too**, read live from FileBrowser's own database (see "Who can see what").
 - Offline HTML sites (question banks, InThinking, StudyIB) are never rendered on the app's own address; links go to
   `view.n-ved.com`, which already serves them.
 - Old-syllabus papers, books and notes are kept but labelled, and the planner prefers current-syllabus papers.
+
+## Who can see what
+
+Nothing about file access is configured in IB God. It reads FileBrowser's database and `config.yaml` (mounted read-only)
+and re-reads them whenever they change (checked every 30 seconds), so a change made in FileBrowser's admin settings
+applies to IB God within about half a minute, for every user, with no restart:
+
+- a user's folder scope and `view` permission for the `docs` source;
+- access rules on folders or files (Allow / Deny by user or FileBrowser group, "deny all"), inherited by everything
+  below the folder, most specific rule winning;
+- FileBrowser groups and `denyByDefault`;
+- people who have never opened FileBrowser get FileBrowser's defaults from `config.yaml`, just as FileBrowser would.
+
+This covers search, topic materials, past papers, the textbook picker, saved items and direct file links (a hidden file
+returns "not found"). The planner only schedules papers the student can open. If FileBrowser's data cannot be read, IB
+God shows nothing rather than everything. The admin panel in Settings shows how many FileBrowser users and rules it read.
+
+## Apps page
+
+`#/apps` shows a card for each service on the server (`app/apps.json`; view.n-ved.com is deliberately left out). A card
+is shown only if the person can actually open it: IB God asks Caddy for a small file on that site using the person's own
+Authelia session, so the answer follows Authelia's live access_control rules (for example User admin only appears for
+`lldap_admin`). The Files card is also hidden without FileBrowser view permission. Results are cached for 5 minutes.
+To add a service, add an entry to `app/apps.json` and rebuild.
 
 ## The planner in brief
 
@@ -104,16 +122,6 @@ The library index is derived data: if the database is lost, students' plans are 
   completed work and anything the student placed by hand.
 - The evidence behind these choices, with sources, is in the app under **Study methods** (`app/knowledge.py`).
 
-## The AI model: what to expect
-
-- Qwen3.5-4B, 4-bit, on the i7-4790S: about 7 words-pieces per second. Coach answers start after roughly 20-30 seconds;
-  feedback on a full essay takes 5-10 minutes and runs in a queue.
-- The coach is grounded in the built-in study-science notes, the student's own subjects and exam structure, and
-  current-syllabus notes from the drive. It refuses to write assessed work. Messages that suggest a student is in
-  danger get a fixed, careful reply pointing to real help instead of a model answer.
-- The feedback writer gives comments per official criterion plus automatic checks (length, citations, structure).
-  It reads text only (no graphs, tables or equations), does not predict marks and never rewrites the student's work.
-- If the model is stopped, the rest of the app keeps working; the coach falls back to the knowledge base.
 
 ## Settings (environment variables in `docker-compose.yml`)
 
@@ -122,8 +130,7 @@ The library index is derived data: if the database is lost, students' plans are 
 | `IBGOD_EXCLUDE_TOP` | `lost+found,Shaffy` | top-level folders never indexed or served |
 | `IBGOD_ADMIN_GROUPS` / `IBGOD_ADMIN_USERS` | `lldap_admin` / `admin` | who sees the server panel |
 | `IBGOD_INDEX_WORKERS` | `2` | parallel text extraction (low priority) |
-| `IBGOD_RATE_COACH` / `IBGOD_RATE_FEEDBACK` | `40` per hour / `8` per day | per-student limits |
-| `IBGOD_MAX_UPLOAD_MB` | `20` | largest draft upload |
+| `IBGOD_FB_SOURCE` | `/srv/docs` | FileBrowser's name for the folder mounted here as the library |
 | `TZ` | `Europe/Stockholm` | what "today" means |
 
 `IBGOD_DEV_USER` exists for the isolated test copy only (`deploy/dev-up.sh`). The app refuses to start with it set on
@@ -137,9 +144,8 @@ a network where Caddy is reachable.
 - Strict Content-Security-Policy (no inline or third-party scripts; the one UI library is vendored:
   `web/vendor/preact-htm.js`, htm 3.1.1 + Preact, sha256 `72284e8e9079c87817145df1110f74e8a2aa040b2fc384922e18dfcb46fc1fd7`).
 - Files are addressed by index id, never by path; HTML from the drive is never rendered on this origin.
-- Containers: non-root, read-only root filesystem, all capabilities dropped, memory/process limits, no internet.
-- Uploads: PDF/DOCX/TXT only, size-limited, parsed inside the sandboxed container, deleted immediately.
-- Each student sees only their own plan, chats and drafts, can export everything, and can delete it all.
+- Container: non-root, read-only root filesystem, all capabilities dropped, memory/process limits, no internet.
+- Each student sees only their own plan and progress, can export everything, and can delete it all.
 
 ## Tests
 
@@ -150,8 +156,8 @@ deploy/dev-up.sh                         # start test copy
 python3 -I tests/t03_profiles.py         # eight very different students: plans must be consistent and fit their time
 python3 -I tests/t04_edits.py            # edits, issue reporting/dismissal, re-planning
 python3 -I tests/t05_library.py          # what topics, searches and paper lists return
-python3 -I tests/t06_coach.py            # coach answers (prints them for review)
-python3 -I tests/t07_feedback.py         # feedback on a weak draft and real exemplars
+python3 -I tests/t09_coverage.py         # master checklist and clear-plan
+python3 -I tests/t10_access.py <dir>     # FileBrowser rules (needs dev-up.sh started with a scratch copy of FileBrowser's data)
 deploy/dev-up.sh down
 ```
 

@@ -48,7 +48,7 @@ def subject_path(con: sqlite3.Connection, username: str, profile: dict, sub: dic
     if weak:
         nxt.append("Start with your weakest topics: " + ", ".join(f"{t['code']} {t['name']}" for t in weak[:4]) + ".")
     if coursework and cur < target:
-        nxt.append(f"Coursework is {int(coursework)}% of this subject. Check it against the criteria and use the feedback writer before submitting.")
+        nxt.append(f"Coursework is {int(coursework)}% of this subject. Check it against the criteria in the subject guide and an exemplar before submitting.")
     if not pct and any(c["kind"] == "exam" for c in comps):
         nxt.append("Sit one timed paper and record your score in the Past papers tab. It gives a real baseline for the plan.")
     elif pct:
