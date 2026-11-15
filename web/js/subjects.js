@@ -1,5 +1,5 @@
 // Subjects: the grade path, syllabus topics with matched materials, past papers and all resources.
-import { html, useState, useEffect, api, useStore, useLoad, attempt, toast, Icon, Modal, Bar, Spinner, ErrorBox, GradePick, Confidence, ResourceLink, ResourceGroup,
+import { html, useState, useEffect, useRef, api, useStore, useLoad, attempt, toast, Icon, Modal, Bar, Spinner, ErrorBox, GradePick, Confidence, ResourceLink, ResourceGroup,
   fmtMin, fmtDate, subjectClass, plural, pct, go, refreshMe } from './core.js';
 import { createTask } from './tasks.js';
 import { replanNow } from './today.js';
@@ -99,13 +99,14 @@ function TopicRow({ subjectKey, t, done, onChange }) {
     ${t.enabled ? html`<${Confidence} value=${t.confidence || 0} onChange=${(c) => save({ confidence: c })} />` : null}
     ${open ? html`<div class="topic-res stack tight">
       ${!res ? html`<div class="hint"><span class="spinner"></span> Finding materials…</div>` : any ? html`
-        <${ResourceGroup} title="Notes" items=${res.notes} />
+        <${ResourceGroup} title="Your copy" items=${res.yours} />
+        <${ResourceGroup} title=${t.work ? 'Study guides' : 'Notes'} items=${res.notes} />
         <${ResourceGroup} title="In your textbook" items=${res.textbook} />
         <${ResourceGroup} title="Videos" items=${res.videos} />
         <${ResourceGroup} title="Exam questions on this topic" items=${res.questions} />
         <${ResourceGroup} title="Study site pages" items=${res.pages} />` : html`<div class="hint">Nothing matched automatically. <a href=${`#/library?subject=${encodeURIComponent(subjectKey)}&q=${encodeURIComponent(t.name)}`}>Search the library for "${t.name}"</a>.</div>`}
       <div class="row"><a class="btn sm" href=${`#/library?subject=${encodeURIComponent(subjectKey)}&q=${encodeURIComponent(t.name)}`}><${Icon} name="search" size=${14} /> Search more</a>
-        <button class="btn sm ghost" onClick=${rename}>Rename</button></div>
+        ${t.work ? html`<a class="btn sm ghost" href=${'#/subjects/' + encodeURIComponent(subjectKey) + '/works'}>Edit in My works</a>` : html`<button class="btn sm ghost" onClick=${rename}>Rename</button>`}</div>
     </div>` : null}
   </div>`;
 }
@@ -273,7 +274,7 @@ export function SubjectPage({ subjectKey, tab }) {
   useEffect(() => { if (data) { setCur(data.mine.current_grade); setTarget(data.mine.target_grade); setExam(data.mine.exam_date || ''); } }, [data && data.mine.current_grade, data && data.mine.target_grade, data && data.mine.exam_date]);
   if (error) return html`<div class="page"><${ErrorBox} error=${error} retry=${reload} /><a href="#/subjects">Back to subjects</a></div>`;
   if (!data) return html`<div class="page"><${Spinner} label="Loading subject" /></div>`;
-  const active = ['path', 'topics', 'papers', 'resources'].includes(tab) ? tab : 'path';
+  const active = ['path', 'topics', 'works', 'papers', 'resources'].includes(tab) ? tab : 'path';
   const base = '#/subjects/' + encodeURIComponent(subjectKey);
   const save = async () => {
     const body = { current_grade: cur, target_grade: Math.max(cur, target) };
@@ -292,8 +293,8 @@ export function SubjectPage({ subjectKey, tab }) {
         <div class="sub">Grade ${data.mine.current_grade} now · aiming for ${data.mine.target_grade}${hasExam ? ` · last study day ${fmtDate(data.exam_date, { year: true })}` : ''}</div></div>
       <button class="btn" onClick=${() => setEditing(true)}><${Icon} name="pen" size=${16} /> Update grades</button>
     </div>
-    <div class="tabs" role="tablist">${[['path', 'My path'], ['topics', 'Topics'], ['papers', 'Past papers'], ['resources', 'Resources']].map(([k, label]) => html`<button role="tab" aria-selected=${active === k} class=${active === k ? 'on' : ''} onClick=${() => go(base + '/' + k)}>${label}</button>`)}</div>
-    ${active === 'path' ? html`<${PathTab} d=${data} />` : active === 'topics' ? html`<${TopicsTab} d=${data} setData=${setData} />`
+    <div class="tabs" role="tablist">${[['path', 'My path'], ['topics', 'Topics'], ...(data.works_supported ? [['works', 'My works']] : []), ['papers', 'Past papers'], ['resources', 'Resources']].map(([k, label]) => html`<button role="tab" aria-selected=${active === k} class=${active === k ? 'on' : ''} onClick=${() => go(base + '/' + k)}>${label}</button>`)}</div>
+    ${active === 'path' ? html`<${PathTab} d=${data} />` : active === 'topics' ? html`<${TopicsTab} d=${data} setData=${setData} />` : active === 'works' && data.works_supported ? html`<${WorksTab} d=${data} reloadSubject=${reload} />`
       : active === 'papers' ? html`<${PapersTab} d=${data} />` : html`<${ResourcesTab} d=${data} reload=${reload} />`}
     ${editing ? html`<${Modal} title=${'Update ' + data.subject.short} onClose=${() => setEditing(false)} footer=${html`<button class="btn" onClick=${() => setEditing(false)}>Cancel</button><button class="btn primary" onClick=${save}>Save</button>`}>
       <div class="field"><label>Current predicted grade</label><${GradePick} value=${cur} onChange=${(g) => { setCur(g); if (target < g) setTarget(g); }} /></div>
@@ -302,5 +303,126 @@ export function SubjectPage({ subjectKey, tab }) {
         <div class="hint">Leave empty to use the start of the exam session. Your school's exam timetable has the exact dates.</div></div>
       ${data.grades.length > 1 ? html`<div class="hint">Grade history: ${data.grades.map((g) => `${g.grade} (${fmtDate(g.date, { day: false })})`).join(' → ')}</div>` : null}
     <//>` : null}
+  </div>`;
+}
+
+// ───────── My works (language subjects) ─────────
+function fmtMB(b) { return b ? (b / 1048576 >= 1 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB') : ''; }
+
+function uploadWork(url, file) {
+  return api(url + (url.includes('?') ? '&' : '?') + 'filename=' + encodeURIComponent(file ? file.name : ''), { method: url.endsWith('/file') || url.includes('/file?') ? 'PUT' : 'POST', form: file || new Blob([]) });
+}
+
+function WorkEditor({ work, meta, onClose, onSaved }) {
+  const [f, setF] = useState({ title: work.title, author: work.author || '', kind: work.kind, part: work.part, notes: work.notes || '' });
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const save = async () => {
+    setBusy(true);
+    const res = await attempt(() => api(`/api/works/${work.id}`, { method: 'PATCH', body: f }));
+    setBusy(false);
+    if (res) { onSaved(); onClose(); }
+  };
+  return html`<${Modal} title="Edit work" onClose=${onClose} footer=${html`<button class="btn" onClick=${onClose}>Cancel</button><button class="btn primary" disabled=${busy || !f.title.trim()} onClick=${save}>Save</button>`}>
+    <div class="field"><label for="we-t">Title</label><input id="we-t" class="input" maxlength="160" value=${f.title} onInput=${set('title')} /></div>
+    <div class="field"><label for="we-a">Author</label><input id="we-a" class="input" maxlength="120" value=${f.author} onInput=${set('author')} /></div>
+    <div class="row wrap">
+      <div class="field grow"><label for="we-k">Form</label><select id="we-k" class="input" value=${f.kind} onChange=${set('kind')}>${Object.entries(meta.kinds).map(([k, v]) => html`<option value=${k}>${v}</option>`)}</select></div>
+      <div class="field grow"><label for="we-p">Using it for</label><select id="we-p" class="input" value=${f.part} onChange=${set('part')}>${Object.entries(meta.parts).map(([k, v]) => html`<option value=${k}>${v}</option>`)}</select></div>
+    </div>
+    <div class="field"><label for="we-n">Your notes</label><textarea id="we-n" class="input" maxlength="2000" placeholder="Key quotations, themes, the global issue you might link it to…" value=${f.notes} onInput=${set('notes')}></textarea></div>
+  <//>`;
+}
+
+function WorkCard({ w, meta, subjectKey, onChanged, onReplanNeeded }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const fileInput = useRef(null);
+  const attach = async (e) => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    if (file.size > meta.max_mb * 1048576) { toast(`That file is over ${meta.max_mb} MB.`, { error: true }); return; }
+    setBusy(true);
+    const res = await attempt(() => uploadWork(`/api/works/${w.id}/file`, file));
+    setBusy(false);
+    if (res) { toast('Copy saved.'); onChanged(); }
+  };
+  const setCoverage = async (n) => {
+    const res = await attempt(() => api(`/api/subjects/${encodeURIComponent(subjectKey)}/topics/${w.code}`, { method: 'PUT', body: { coverage: n } }));
+    if (res) { onChanged(); onReplanNeeded(); }
+  };
+  const remove = async () => {
+    if (!confirm(`Remove "${w.title}"${w.file_url ? ' and your uploaded copy' : ''}? Its planned sessions are removed too.`)) return;
+    const res = await attempt(() => api(`/api/works/${w.id}`, { method: 'DELETE' }));
+    if (res) { onChanged(); onReplanNeeded(); }
+  };
+  return html`<div class="card stack tight">
+    <div class="row top">
+      <div class="grow"><h3>${w.title}</h3>${w.author ? html`<div class="muted small">${w.author}</div>` : null}
+        <div class="row wrap" style=${{ marginTop: '6px' }}><span class="chip">${meta.kinds[w.kind] || w.kind}</span><span class="chip primary">${meta.parts[w.part] || w.part}</span></div></div>
+      <select class=${'input cov cov' + (w.coverage || 0)} aria-label=${'Progress on ' + w.title} title=${STAGES[w.coverage || 0].plan} value=${w.coverage || 0} onChange=${(e) => setCoverage(Number(e.target.value))}>
+        ${STAGES.map((st) => html`<option value=${st.n}>${st.name}</option>`)}</select>
+    </div>
+    ${w.notes ? html`<div class="small" style=${{ whiteSpace: 'pre-wrap' }}>${w.notes}</div>` : null}
+    <div class="row wrap">
+      ${w.file_url ? html`<a class="btn sm primary" href=${w.file_url} target="_blank" rel="noopener"><${Icon} name="file" size=${14} /> Open your copy</a><span class="hint">${(w.file_ext || '').toUpperCase()} · ${fmtMB(w.file_size)}</span>` : html`<span class="hint">No copy uploaded</span>`}
+      <input ref=${fileInput} type="file" class="hide" accept=".pdf,.epub,.docx,.txt,application/pdf,application/epub+zip" onChange=${attach} />
+      <button class="btn sm" disabled=${busy} onClick=${() => fileInput.current.click()}>${busy ? html`<span class="spinner"></span> Uploading…` : w.file_url ? 'Replace copy' : 'Upload a copy'}</button>
+      <button class="btn sm ghost" onClick=${() => setEditing(true)}>Edit</button>
+      <button class="btn sm ghost danger" onClick=${remove}>Remove</button>
+    </div>
+    ${w.guides && w.guides.length ? html`<${ResourceGroup} title="Study guides from the library" items=${w.guides} />` : html`<div class="hint">No study guide for this title was found in the library.</div>`}
+    ${editing ? html`<${WorkEditor} work=${w} meta=${meta} onClose=${() => setEditing(false)} onSaved=${onChanged} />` : null}
+  </div>`;
+}
+
+function WorksTab({ d, reloadSubject }) {
+  const key = d.subject.key;
+  const { data, error, reload } = useLoad(() => api(`/api/subjects/${encodeURIComponent(key)}/works`), [key]);
+  const [form, setForm] = useState({ title: '', author: '', kind: 'novel', part: 'undecided' });
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [replanning, setReplanning] = useState(false);
+  const fileInput = useRef(null);
+  if (error) return html`<${ErrorBox} error=${error} retry=${reload} />`;
+  if (!data) return html`<${Spinner} label="Loading your works" />`;
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const changed = () => { reload(); reloadSubject && reloadSubject(); };
+  const add = async (e) => {
+    e.preventDefault();
+    if (file && file.size > data.max_mb * 1048576) { toast(`That file is over ${data.max_mb} MB.`, { error: true }); return; }
+    setBusy(true);
+    const q = new URLSearchParams({ title: form.title.trim(), author: form.author.trim(), kind: form.kind, part: form.part });
+    const res = await attempt(() => uploadWork(`/api/subjects/${encodeURIComponent(key)}/works?${q}`, file));
+    setBusy(false);
+    if (!res) return;
+    toast(`Added "${res.work.title}".`);
+    setForm({ title: '', author: '', kind: form.kind, part: 'undecided' }); setFile(null); setDirty(true); changed();
+  };
+  const replan = async () => { setReplanning(true); const res = await replanNow(true); setReplanning(false); if (res) setDirty(false); };
+  return html`<div class="stack">
+    <form class="card stack" onSubmit=${add}>
+      <div class="card-title"><${Icon} name="book" /><h2 class="grow">Add a work you are studying</h2></div>
+      <div class="hint">Add every text you study for ${d.subject.short}. Each one goes into your checklist and plan (reading, writing practice, reviews), and is matched to study guides in the library.</div>
+      <div class="row wrap">
+        <div class="field grow"><label for="wk-t">Title</label><input id="wk-t" class="input" required maxlength="160" placeholder="e.g. The Great Gatsby" value=${form.title} onInput=${set('title')} /></div>
+        <div class="field grow"><label for="wk-a">Author</label><input id="wk-a" class="input" maxlength="120" placeholder="e.g. F. Scott Fitzgerald" value=${form.author} onInput=${set('author')} /></div>
+      </div>
+      <div class="row wrap">
+        <div class="field grow"><label for="wk-k">Form</label><select id="wk-k" class="input" value=${form.kind} onChange=${set('kind')}>${Object.entries(data.kinds).map(([k, v]) => html`<option value=${k}>${v}</option>`)}</select></div>
+        <div class="field grow"><label for="wk-p">Using it for</label><select id="wk-p" class="input" value=${form.part} onChange=${set('part')}>${Object.entries(data.parts).map(([k, v]) => html`<option value=${k}>${v}</option>`)}</select></div>
+      </div>
+      <div class="row wrap">
+        <input ref=${fileInput} type="file" class="hide" accept=".pdf,.epub,.docx,.txt,application/pdf,application/epub+zip" onChange=${(e) => setFile(e.target.files[0] || null)} />
+        <button type="button" class="btn" onClick=${() => fileInput.current.click()}><${Icon} name="upload" size=${16} /> ${file ? 'Change file' : 'Attach your copy (optional)'}</button>
+        <span class="hint grow">${file ? `${file.name} · ${fmtMB(file.size)}` : `PDF, EPUB, Word or text, up to ${data.max_mb} MB`}</span>
+        <button class="btn primary" type="submit" disabled=${busy || !form.title.trim()}>${busy ? html`<span class="spinner"></span> Adding…` : 'Add work'}</button>
+      </div>
+      <div class="hint">Only you can see your works and files. ${data.used_mb} MB of ${data.quota_mb} MB used.</div>
+    </form>
+    ${dirty ? html`<div class="inline-note"><span class="grow">Your works changed. Re-plan to schedule them.</span><button class="btn sm primary" disabled=${replanning} onClick=${replan}>${replanning ? 'Re-planning…' : 'Re-plan now'}</button></div>` : null}
+    ${data.works.length ? data.works.map((w) => html`<${WorkCard} key=${w.id} w=${w} meta=${data} subjectKey=${key} onChanged=${changed} onReplanNeeded=${() => setDirty(true)} />`)
+      : html`<div class="empty"><h3>No works yet</h3><div>Add the texts you study in class, starting with the ones you might use for Paper 2 or your oral.</div></div>`}
   </div>`;
 }

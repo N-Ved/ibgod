@@ -93,6 +93,21 @@ This covers search, topic materials, past papers, the textbook picker, saved ite
 returns "not found"). The planner only schedules papers the student can open. If FileBrowser's data cannot be read, IB
 God shows nothing rather than everything. The admin panel in Settings shows how many FileBrowser users and rules it read.
 
+## My works (Language A and B)
+
+Each Language A / B subject page has a **My works** tab. Students add the texts they study (title, author, form, and
+whether it is for Paper 2, the individual oral or the HL essay) and can upload their own copy (PDF, EPUB, Word or
+plain text, up to 24 MB; 40 works and 400 MB per student). Each work:
+- is matched to the LitCharts study guides on the drive by title;
+- becomes an item in the subject's master checklist ("Your works"), so the planner schedules "Read and annotate",
+  "Write about" (timed Paper 2 practice) and spaced reviews for it, following its checklist level;
+- shows "Your copy" and its study guides in the matching plan tasks.
+
+Files are checked by their content (a renamed program is refused), stored under `data/works/` with random names,
+and only ever served to their owner: PDF and text inline under a sandboxing policy, EPUB/Word as downloads. Removing
+a work deletes its file and its planned sessions; deleting the account deletes every upload. The daily snapshot covers
+the works list but not the files themselves: back up `data/works/` along with `data/ibgod.db`.
+
 ## Apps page
 
 `#/apps` shows a card for each service on the server (`app/apps.json`; view.n-ved.com is deliberately left out). A card
@@ -158,6 +173,7 @@ python3 -I tests/t04_edits.py            # edits, issue reporting/dismissal, re-
 python3 -I tests/t05_library.py          # what topics, searches and paper lists return
 python3 -I tests/t09_coverage.py         # master checklist and clear-plan
 python3 -I tests/t10_access.py <dir>     # FileBrowser rules (needs dev-up.sh started with a scratch copy of FileBrowser's data)
+python3 -I tests/t11_works.py            # My works (needs a second copy as another user on 127.0.0.1:18082, see the file)
 deploy/dev-up.sh down
 ```
 

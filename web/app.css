@@ -60,7 +60,7 @@ small, .small { font-size: .84rem; }
 .noscript { padding: 30px; text-align: center; }
 
 /* shell */
-.shell { display: grid; grid-template-columns: var(--nav-w) 1fr; min-height: 100vh; }
+.shell { display: grid; grid-template-columns: var(--nav-w) minmax(0, 1fr); min-height: 100vh; }
 .sidebar { position: sticky; top: 0; height: 100vh; padding: 18px 12px; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 16px; font-weight: 800; font-size: 1.2rem; letter-spacing: -.02em; color: var(--text); }
 .brand:hover { text-decoration: none; }
@@ -274,7 +274,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
   .chat-main { height: calc(100vh - 290px); min-height: 380px; }
 }
 @media (max-width: 820px) {
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { display: none; }
   .main { padding: 14px 14px calc(86px + env(safe-area-inset-bottom)); }
   .topbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
@@ -319,3 +319,8 @@ select.cov1 { border-color: var(--info); } select.cov2 { border-color: var(--war
 .app-go { color: var(--faint); }
 .app-card:hover .app-go { color: var(--app); }
 @media (max-width: 820px) { .app-grid { grid-template-columns: 1fr; gap: 10px; } .app-card { padding: 13px; } .app-icon { width: 48px; height: 48px; } }
+
+/* Flex/grid children default to their content's minimum width; a long tab row or form row must never widen the page. */
+.page > *, .card > *, .stack > *, .grid > *, .row > .grow, .field { min-width: 0; }
+.tabs { max-width: 100%; }
+.field .input { max-width: 100%; }

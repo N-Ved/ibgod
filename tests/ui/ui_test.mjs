@@ -13,6 +13,9 @@ function watch(page, tag) {
   page.on('pageerror', (e) => { console.log(`PAGE ERROR (${tag}):`, String(e).slice(0, 400)); problems.push('page error: ' + String(e).slice(0, 120)); });
   page.on('response', (r) => { if (r.status() >= 400 && !r.url().includes('/favicon')) { console.log(`HTTP ${r.status()} (${tag}):`, r.request().method(), r.url().replace(BASE, '')); problems.push(`http ${r.status()} ${r.url().replace(BASE, '')}`); } });
 }
+
+// Widest element on the page minus the screen width: catches content that is clipped, not just scrollable.
+const overflowOf = (pg) => pg.evaluate(() => Math.round(Math.max(0, ...[...document.querySelectorAll('.main *, .wizard *')].filter((e) => { const st = getComputedStyle(e); return st.display !== 'none' && st.visibility !== 'hidden' && !e.closest('.tabs, .scroll-x, .chat-list'); }).map((e) => e.getBoundingClientRect().right)) - screen.width));  // screen.width: mobile browsers widen innerWidth to fit overflowing content
 const shot = async (page, name) => { await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: false }); };
 
 // start from a clean account
@@ -53,6 +56,14 @@ await cards.nth(2).locator('.grade-pick').nth(0).locator('button', { hasText: '3
 await shot(page, '03-wizard-grades');
 await page.locator('.wizard-foot .btn.primary').click();
 
+// what has been taught already
+await page.waitForSelector('text=What has your class already taught?');
+await page.waitForSelector('.wizard .pick-list .pick', { timeout: 15000 });
+await page.locator('.wizard .card', { hasText: 'Physics' }).locator('.pick').nth(1).click();  // unit B (later steps change unit A)
+note((await page.locator('.wizard .card', { hasText: 'Physics' }).locator('.pick.on').count()) === 1, 'setup: a taught unit can be ticked');
+await shot(page, '03b-wizard-taught');
+await page.locator('.wizard-foot .btn.primary').click();
+
 // textbooks
 await page.waitForSelector('.wizard select', { timeout: 15000 });
 const sel = page.locator('.wizard select').first();
@@ -68,6 +79,7 @@ await page.locator('.btn', { hasText: 'Steady' }).click();
 await shot(page, '05-wizard-time');
 await page.locator('.wizard-foot .btn.primary').click();
 await page.waitForSelector('text=Ready to build your plan');
+note((await page.locator('.chip.ok', { hasText: 'unit' }).count()) === 1, 'setup review shows the taught units');
 await shot(page, '06-wizard-review');
 await page.locator('.wizard-foot .btn.primary').click();
 
@@ -120,7 +132,7 @@ await page.fill('#at-title', 'Chemistry test revision');
 await page.locator('.modal .btn.primary').click();
 await page.waitForFunction(() => !document.querySelector('#at-title'), null, { timeout: 10000 });
 if (await page.locator('.modal').count()) await page.locator('.modal .btn.primary').click();
-note((await page.locator('.task-title', { hasText: 'Chemistry test revision' }).count()) > 0, 'a manual task can be added');
+note(await page.waitForSelector('.task-title:has-text("Chemistry test revision")', { timeout: 10000 }).then(() => true).catch(() => false), 'a manual task can be added');
 await page.locator('.page-head .btn.primary', { hasText: 'Re-plan' }).click();
 await page.locator('.modal .btn.primary').click();
 await page.waitForFunction(() => !document.querySelector('.modal'), null, { timeout: 60000 });
@@ -174,6 +186,27 @@ const href = await page.locator('.res-list .res').first().getAttribute('href');
 const fileRes = await ctx.request.get(BASE + href.split('#')[0], { maxRedirects: 0 });
 note([200, 302].includes(fileRes.status()), 'a search result opens', `status=${fileRes.status()} type=${fileRes.headers()['content-type']}`);
 
+// taught unit from setup shows as Introduced
+await page.goto(BASE + '/#/subjects/physics/topics');
+await page.waitForSelector('.topic');
+note((await page.locator('select.cov1').count()) >= 3, 'the unit ticked in setup is marked Introduced', `introduced=${await page.locator('select.cov1').count()}`);
+
+// my works (English A)
+await page.goto(BASE + '/#/subjects/' + encodeURIComponent('lang_a_ll:English') + '/works');
+await page.waitForSelector('#wk-t', { timeout: 15000 });
+await page.fill('#wk-t', 'The Great Gatsby'); await page.fill('#wk-a', 'F. Scott Fitzgerald');
+await page.setInputFiles('.card input[type=file]', { name: 'gatsby.txt', mimeType: 'text/plain', buffer: Buffer.from('In my younger and more vulnerable years my father gave me some advice.') });
+await page.locator('button[type=submit]', { hasText: 'Add work' }).click();
+await page.waitForSelector('.card h3:has-text("The Great Gatsby")', { timeout: 15000 });
+note((await page.locator('a', { hasText: 'Open your copy' }).count()) === 1, 'works: upload a copy from the page');
+note((await page.locator('.res', { hasText: 'Gatsby' }).count()) >= 1, 'works: matching study guide is listed');
+note((await page.locator('.inline-note', { hasText: 'Re-plan' }).count()) === 1, 'works: a small re-plan note appears');
+await shot(page, '16a-works');
+await page.locator('.inline-note .btn.primary').click();
+await page.waitForFunction(() => !document.querySelector('.inline-note'), null, { timeout: 60000 });
+await page.goto(BASE + '/#/plan?date=' + new Date().toISOString().slice(0, 10));
+await page.waitForSelector('.week .day');
+
 // clear plan, then rebuild
 await page.goto(BASE + '/#/plan');
 await page.waitForSelector('.week .day');
@@ -225,20 +258,28 @@ await m.goto(BASE + '/#/today');
 await m.waitForSelector('.hero');
 note(await m.locator('.tabbar').isVisible(), 'mobile shows the bottom tab bar');
 note(!(await m.locator('.sidebar').isVisible()), 'mobile hides the sidebar');
-const overflow = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+const overflow = await overflowOf(m);
 note(overflow <= 1, 'no horizontal scrolling on a phone (today)', `overflow=${overflow}px`);
 await m.screenshot({ path: `${OUT}/30-mobile-today.png` });
 for (const [route, selr, name] of [['plan', '.week .day', '31-mobile-plan'], ['subjects', '.subject-card', '32-mobile-subjects'], ['library', 'input[type=search]', '33-mobile-library'], ['more', '.page .nav-item', '34-mobile-more'], ['settings', '#st-name', '35-mobile-settings'], ['apps', '.app-card', '36-mobile-apps']]) {
   await m.goto(BASE + '/#/' + route);
   await m.waitForSelector(selr, { timeout: 15000 });
   await m.waitForTimeout(400);
-  const ov = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  const ov = await overflowOf(m);
   note(ov <= 1, `no horizontal scrolling on a phone (${route})`, `overflow=${ov}px`);
   await m.screenshot({ path: `${OUT}/${name}.png` });
 }
+await m.goto(BASE + '/#/subjects/' + encodeURIComponent('lang_a_ll:English') + '/works'); await m.waitForSelector('#wk-t');
+{ const ov = await overflowOf(m); note(ov <= 1, 'no horizontal scrolling on a phone (my works)', `overflow=${ov}px`); }
+await m.screenshot({ path: `${OUT}/38-mobile-works.png` });
+await m.goto(BASE + '/#/subjects/physics/path'); await m.waitForSelector('.step');
+{ const ov = await overflowOf(m); note(ov <= 1, 'no horizontal overflow on a phone (subject path)', `overflow=${ov}px`); }
+await m.goto(BASE + '/#/setup'); await m.waitForSelector('.wizard');
+{ const ov = await overflowOf(m); note(ov <= 1, 'no horizontal overflow on a phone (setup)', `overflow=${ov}px`); }
+await m.screenshot({ path: `${OUT}/39-mobile-setup.png` });
 await m.goto(BASE + '/#/subjects/physics/topics'); await m.waitForSelector('.topic');
 await m.locator('select[aria-label^="Set all of"]').first().selectOption('2'); await m.waitForSelector('.inline-note');
-const mov = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth); note(mov <= 1, 'no horizontal scrolling on a phone (checklist)', `overflow=${mov}px`);
+const mov = await overflowOf(m); note(mov <= 1, 'no horizontal scrolling on a phone (checklist)', `overflow=${mov}px`);
 await m.screenshot({ path: `${OUT}/37-mobile-topics.png` });
 
 // back to the default theme for the next run

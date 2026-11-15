@@ -16,7 +16,7 @@ from datetime import datetime
 from . import config
 
 log = logging.getLogger("ibgod.backup")
-TABLES = ["users", "user_subjects", "topic_state", "tasks", "day_overrides", "dismissed_issues", "grade_log", "paper_attempts", "resource_marks", "chats", "chat_messages", "feedback_jobs"]
+TABLES = ["users", "user_subjects", "topic_state", "tasks", "day_overrides", "dismissed_issues", "grade_log", "paper_attempts", "resource_marks", "works"]
 KEEP = 14
 _thread: threading.Thread | None = None
 

@@ -104,7 +104,7 @@ export function Settings() {
         <div class="field"><label for="st-del">Delete all my IB God data</label>
           <div class="row wrap"><input id="st-del" class="input grow" placeholder="Type DELETE to confirm" value=${confirmText} onInput=${(e) => setConfirmText(e.target.value)} />
             <button class="btn danger" disabled=${confirmText !== 'DELETE'} onClick=${wipe}>Delete</button></div>
-          <div class="hint">Removes your plan, grades, checklist and progress permanently. Your school login is not affected.</div></div>
+          <div class="hint">Removes your plan, grades, checklist, progress and uploaded works permanently. Your school login is not affected.</div></div>
       </div>
     </div>
 

@@ -205,7 +205,7 @@ const KIND_LABEL = {
   exam_schedule: 'Exam schedule', grade_descriptors: 'Grade descriptors', text_types: 'Text types', case_study: 'Case study', ee_exemplar: 'EE exemplar',
   ia_exemplar: 'IA exemplar', tok_exemplar: 'TOK exemplar', lit_guide: 'Literature guide', literary_term: 'Literary term', worksheet: 'Worksheet',
   admissions_test: 'Admissions test', official_doc: 'Official document', document: 'Document', calculator_rules: 'Calculator rules', exam_conduct: 'Exam rules',
-  teacher_support: 'Support material', paper_samples: 'Paper samples',
+  teacher_support: 'Support material', paper_samples: 'Paper samples', your_copy: 'Your copy',
 };
 export function kindLabel(k) { return KIND_LABEL[k] || (k || 'File').replace(/_/g, ' '); }
 function resIcon(r) {
@@ -235,62 +235,6 @@ export function ResourceLink({ r, sub, extra }) {
 export function ResourceGroup({ title, items, empty }) {
   if (!items || !items.length) return empty ? html`<div><div class="section-label">${title}</div><div class="hint">${empty}</div></div>` : null;
   return html`<div><div class="section-label">${title}</div><div class="res-list">${items.map((r) => html`<${ResourceLink} key=${r.id + ':' + (r.page || 0)} r=${r} />`)}</div></div>`;
-}
-
-// The local model sometimes writes formulas in LaTeX. Turn the common cases into readable Unicode text.
-const TEX = { alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', Delta: 'Δ', epsilon: 'ε', varepsilon: 'ε', theta: 'θ', lambda: 'λ', mu: 'μ', nu: 'ν', pi: 'π', rho: 'ρ', sigma: 'σ', Sigma: 'Σ', tau: 'τ',
-  phi: 'φ', varphi: 'φ', omega: 'ω', Omega: 'Ω', eta: 'η', kappa: 'κ', times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓', approx: '≈', sim: '~', neq: '≠', ne: '≠', leq: '≤', le: '≤', geq: '≥', ge: '≥',
-  ll: '≪', gg: '≫', rightarrow: '→', to: '→', leftarrow: '←', Rightarrow: '⇒', implies: '⇒', rightleftharpoons: '⇌', leftrightarrow: '↔', infty: '∞', propto: '∝', circ: '°', degree: '°', partial: '∂',
-  int: '∫', sum: 'Σ', quad: ' ', qquad: '  ', ldots: '…', dots: '…', cdots: '⋯', angle: '∠', perp: '⊥', parallel: '∥', in: '∈', forall: '∀', exists: '∃', sin: 'sin', cos: 'cos', tan: 'tan', ln: 'ln', log: 'log',
-  lim: 'lim', left: '', right: '', displaystyle: '', big: '', Big: '' };
-const SUP = { 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹', '+': '⁺', '-': '⁻', n: 'ⁿ' };
-const SUB = { 0: '₀', 1: '₁', 2: '₂', 3: '₃', 4: '₄', 5: '₅', 6: '₆', 7: '₇', 8: '₈', 9: '₉', a: 'ₐ', e: 'ₑ', o: 'ₒ', x: 'ₓ', s: 'ₛ', n: 'ₙ', m: 'ₘ', t: 'ₜ', p: 'ₚ', k: 'ₖ', h: 'ₕ', l: 'ₗ', i: 'ᵢ', r: 'ᵣ', u: 'ᵤ', v: 'ᵥ' };
-function script(text, map, mark) {
-  const chars = [...text];
-  if (chars.every((c) => map[c] !== undefined)) return chars.map((c) => map[c]).join('');
-  return /^[A-Za-z0-9]+$/.test(text) ? mark + text : `${mark}(${text})`;
-}
-export function delatex(text) {
-  if (!text || !/[\\$^_]/.test(text)) return text || '';
-  // Inline maths markers first, while the LaTeX inside them is still recognisable (so "$5 and $10" is left alone).
-  let s = text.replace(/\$\$([^$]+)\$\$/g, '$1')
-    .replace(/\$([^$\s][^$\n]{0,238}[^$\s]|[^$\s])\$/g, (m, inner) => (/[\\^_=+*/<>-]/.test(inner) || (!/\s/.test(inner) && inner.length <= 10) ? inner : m));
-  for (let i = 0; i < 4; i++) s = s.replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, (m, a, b) => `(${a})/(${b})`);
-  s = s.replace(/\\sqrt\s*\{([^{}]*)\}/g, '√($1)').replace(/\\(?:text|mathrm|mathbf|mathit|operatorname|vec|hat|bar|overline)\s*\{([^{}]*)\}/g, '$1');
-  s = s.replace(/\\([A-Za-z]+)/g, (m, name) => (TEX[name] !== undefined ? TEX[name] : name)).replace(/Δ (?=[A-Za-zα-ω])/g, 'Δ');
-  s = s.replace(/\\[,;:! ]/g, ' ').replace(/\\([%#&{}_$])/g, '$1');
-  s = s.replace(/\^\{([^{}]*)\}/g, (m, a) => script(a, SUP, '^')).replace(/\^(-?[0-9n])/g, (m, a) => script(a, SUP, '^'));
-  s = s.replace(/_\{([^{}]*)\}/g, (m, a) => script(a, SUB, '_')).replace(/([A-Za-zα-ωΑ-Ω)])_([0-9]+)/g, (m, base, a) => base + script(a, SUB, '_'))
-    .replace(/([A-Za-zα-ωΑ-Ω])_([a-z])(?![A-Za-z0-9])/g, (m, base, a) => base + script(a, SUB, '_'));
-  return s.replace(/[{}]/g, '').replace(/ {2,}/g, ' ');
-}
-
-/** Minimal, safe Markdown for coach answers: paragraphs, bold, bullet and numbered lists. Builds elements, never HTML strings. */
-function inline(text) {
-  return text.split(/(\*\*[^*]+\*\*)/g).map((p) => (p.startsWith('**') && p.endsWith('**') && p.length > 4 ? html`<strong>${p.slice(2, -2)}</strong>` : p));
-}
-export function RichText({ text }) {
-  const blocks = [];
-  let list = null;
-  for (const raw of delatex(text || '').split('\n')) {
-    const line = raw.trimEnd();
-    const ol = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
-    const ul = line.match(/^\s*[-*•]\s+(.*)$/);
-    if (ol || ul) {
-      const type = ol ? 'ol' : 'ul';
-      if (!list || list.type !== type) { list = { type, items: [] }; blocks.push(list); }
-      list.items.push(ol ? ol[2] : ul[1]);
-    } else if (!line.trim()) {
-      list = null;
-    } else {
-      const h = line.match(/^#{1,4}\s+(.*)$/);
-      if (list && /^\s{2,}/.test(raw)) { list.items[list.items.length - 1] += ' ' + line.trim(); continue; }
-      list = null;
-      blocks.push(h ? { type: 'h', text: h[1] } : { type: 'p', text: line });
-    }
-  }
-  return html`<div>${blocks.map((b) => b.type === 'p' ? html`<p>${inline(b.text)}</p>` : b.type === 'h' ? html`<p><strong>${inline(b.text)}</strong></p>`
-    : b.type === 'ol' ? html`<ol>${b.items.map((i) => html`<li>${inline(i)}</li>`)}</ol>` : html`<ul>${b.items.map((i) => html`<li>${inline(i)}</li>`)}</ul>`)}</div>`;
 }
 
 export function go(hash) { location.hash = hash; }

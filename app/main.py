@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import access, advice, apps, auth, backup, catalog, config, db, indexer, planner, search
+from . import access, advice, apps, auth, backup, catalog, config, db, indexer, planner, search, works
 from .auth import User, current_user
 from .knowledge import FAMILY_TIPS, GRADE_BANDS, TECHNIQUES
 
@@ -210,6 +210,20 @@ def get_catalog(user: User = Depends(current_user)):
     return {"subjects": catalogue(), "groups": catalog.GROUP_NAMES}
 
 
+@app.get("/api/catalog/units")
+def catalog_units(subject: str, level: str = "HL", user: User = Depends(current_user)):
+    """Units of a subject at a level (for the setup step that asks what has been taught already)."""
+    check_key(subject)
+    lv = level if level in ("HL", "SL") else "HL"
+    units: dict[str, dict] = {}
+    for t in catalog.topics_for(subject, lv):
+        if t.get("optional") and not t.get("default_on"):
+            continue
+        u = units.setdefault(t["unit_code"], {"code": t["unit_code"], "name": t["unit_name"], "topics": 0})
+        u["topics"] += 1
+    return {"units": list(units.values())}
+
+
 @app.get("/api/textbooks")
 def textbooks(subject: str, level: str = "HL", user: User = Depends(current_user)):
     check_key(subject)
@@ -229,6 +243,7 @@ class SubjectIn(BaseModel):
     textbook_id: int | None = None
     textbook_other: str | None = Field(default=None, max_length=160)
     exam_date: str | None = None
+    covered_units: list[str] | None = Field(default=None, max_length=40)  # units already taught in class -> "Introduced"
 
     @field_validator("exam_date")
     @classmethod
@@ -284,6 +299,13 @@ def _save_subject(con, username: str, s: SubjectIn, position: int) -> None:
                    ON CONFLICT(username, subject) DO UPDATE SET level=excluded.level, current_grade=excluded.current_grade, target_grade=excluded.target_grade,
                    textbook_id=excluded.textbook_id, textbook_other=excluded.textbook_other, exam_date=excluded.exam_date, position=excluded.position""",
                 (username, key, level, s.current_grade, target, tb, _clean_text(s.textbook_other, 160), s.exam_date, position))
+    if s.covered_units:
+        wanted = {u for u in s.covered_units if isinstance(u, str)}
+        for t in catalog.topics_for(key, level):
+            if t["unit_code"] in wanted:
+                # raise to "Introduced" only; anything the student already marked higher stays
+                con.execute("""INSERT INTO topic_state(username, subject, topic_code, coverage) VALUES(?,?,?,1)
+                               ON CONFLICT(username, subject, topic_code) DO UPDATE SET coverage=MAX(topic_state.coverage, 1)""", (username, key, t["code"]))
     if not prev or prev["current_grade"] != s.current_grade:
         con.execute("INSERT INTO grade_log(username, subject, date, grade, note) VALUES(?,?,?,?,?)", (username, key, planner.today_local().isoformat(), s.current_grade, "setup" if not prev else "update"))
 
@@ -425,11 +447,19 @@ def get_subject(key: str, user: User = Depends(current_user)):
                            "enabled": t["default_on"] if st.get("enabled") is None else bool(st["enabled"]), "confidence": st.get("confidence"), "coverage": int(st.get("coverage") or 0)})
             if ts:
                 units.append({"code": u["code"], "name": u["name"], "topics": ts})
+        if works.supports(key):
+            wt = []
+            for t in works.as_topics(works.rows_for(con, user.username, key)):
+                st = states.get(t["code"]) or {}
+                wt.append({"code": t["code"], "name": t["name"], "default_name": t["name"], "hl_only": False, "optional": False, "work": True,
+                           "enabled": True if st.get("enabled") is None else bool(st["enabled"]), "confidence": st.get("confidence"), "coverage": int(st.get("coverage") or 0)})
+            if wt:
+                units.append({"code": works.UNIT["code"], "name": works.UNIT["name"], "topics": wt})
         tb = db.one(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.id=? AND visible(r.path)", (row["textbook_id"],)) if row["textbook_id"] else None
         done = {r["topic_code"]: r["n"] for r in db.rows(con, "SELECT topic_code, COUNT(*) n FROM tasks WHERE username=? AND subject=? AND status='done' AND topic_code IS NOT NULL GROUP BY 1", (user.username, key))}
         grades = db.rows(con, "SELECT date, grade FROM grade_log WHERE username=? AND subject=? ORDER BY date, id", (user.username, key))
         plan_info = (db.get_meta(con, f"plan:{user.username}", {}) or {}).get("subjects", {}).get(key)
-        return {"subject": {k: pub[k] for k in ("key", "name", "short", "group", "group_name", "levels", "family", "syllabus_from", "note", "generic")},
+        return {"works_supported": works.supports(key), "subject": {k: pub[k] for k in ("key", "name", "short", "group", "group_name", "levels", "family", "syllabus_from", "note", "generic")},
                 "assessment": pub["assessment"].get(row["level"], []), "mine": row, "units": units, "textbook": search.public(tb) if tb else None,
                 "path": advice.subject_path(con, user.username, profile, row), "overview": search.subject_overview(con, key, row["level"]),
                 "done_by_topic": done, "grades": grades, "plan": plan_info, "exam_date": planner.subject_end(profile, row).isoformat()}
@@ -447,7 +477,7 @@ def put_topic(key: str, code: str, body: TopicIn, user: User = Depends(current_u
     check_key(key)
     with tx_for(user) as con:
         row = my_subject(con, user.username, key)
-        if code not in {t["code"] for t in catalog.topics_for(key, row["level"])}:
+        if code not in {t["code"] for t in works.topics_for(con, user.username, key, row["level"])}:
             raise HTTPException(404, "Unknown topic")
         st = db.one(con, "SELECT * FROM topic_state WHERE username=? AND subject=? AND topic_code=?", (user.username, key, code)) or {}
         enabled = st.get("enabled") if body.enabled is None else int(body.enabled)
@@ -471,7 +501,7 @@ def put_coverage_bulk(key: str, body: CoverageBulk, user: User = Depends(current
     check_key(key)
     with tx_for(user) as con:
         row = my_subject(con, user.username, key)
-        topics = [t for t in catalog.topics_for(key, row["level"]) if body.unit is None or t["unit_code"] == body.unit]
+        topics = [t for t in works.topics_for(con, user.username, key, row["level"]) if body.unit is None or t["unit_code"] == body.unit]
         if not topics:
             raise HTTPException(404, "Unknown unit")
         for t in topics:
@@ -488,9 +518,13 @@ def topic_resources(key: str, code: str, user: User = Depends(current_user)):
     check_key(key)
     with ro_for(user) as con:
         row = my_subject(con, user.username, key)
-        topic = next((t for t in catalog.topics_for(key, row["level"]) if t["code"] == code), None)
+        topic = next((t for t in works.topics_for(con, user.username, key, row["level"]) if t["code"] == code), None)
         if not topic:
             raise HTTPException(404, "Unknown topic")
+        if topic.get("work"):
+            w = db.one(con, "SELECT * FROM works WHERE id=? AND username=?", (topic["work_id"], user.username))
+            return {"notes": works.guides(con, w["title"], w.get("author")), "yours": [works.as_resource(w)] if w["stored_name"] else [],
+                    "textbook": [], "videos": [], "questions": [], "pages": []}
         ck = (key, row["level"], code, row["textbook_id"])
         hit = _topic_cache.get(ck)
         if hit and time.time() - hit[0] < 1800:
@@ -501,6 +535,171 @@ def topic_resources(key: str, code: str, user: User = Depends(current_user)):
     if any(data.values()):
         _topic_cache[ck] = (time.time(), data)
     return data
+
+
+# ───────────────────────── my works (language subjects) ─────────────────────────
+def _work(con, username: str, wid: int) -> dict:
+    w = db.one(con, "SELECT * FROM works WHERE id=? AND username=?", (wid, username))
+    if not w:
+        raise HTTPException(404, "Work not found")
+    return w
+
+
+def _work_meta(title: str | None, author: str | None, kind: str | None, part: str | None, notes: str | None) -> dict:
+    out = {}
+    if title is not None:
+        t = _clean_text(title, 160)
+        if not t:
+            raise HTTPException(422, "Give the work a title")
+        out["title"] = t
+    if author is not None:
+        out["author"] = _clean_text(author, 120)
+    if kind is not None:
+        if kind not in works.KINDS:
+            raise HTTPException(422, "Unknown kind of work")
+        out["kind"] = kind
+    if part is not None:
+        if part not in works.PARTS:
+            raise HTTPException(422, "Unknown part of the course")
+        out["part"] = part
+    if notes is not None:
+        out["notes"] = _clean_text(notes, 2000)
+    return out
+
+
+async def _read_upload(request: Request) -> bytes:
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > works.MAX_BYTES:
+            raise HTTPException(413, f"That file is larger than {works.MAX_BYTES // (1024 * 1024)} MB. Try a smaller copy (for example without images).")
+    return bytes(data)
+
+
+def _accept_file(con, username: str, data: bytes, filename: str | None, replacing: int = 0) -> tuple[str, str, int, str]:
+    ext = works.sniff(data)
+    if not ext:
+        raise HTTPException(415, "Upload a PDF, EPUB, Word (.docx) or plain-text file.")
+    if works.used_bytes(con, username) - replacing + len(data) > works.QUOTA_BYTES:
+        raise HTTPException(413, f"Your uploads would go over {works.QUOTA_BYTES // (1024 * 1024)} MB. Delete a file you no longer need first.")
+    name = re.sub(r"[^\w .,()&'-]", "_", (filename or f"work.{ext}"))[:120] or f"work.{ext}"
+    return works.store(username, data, ext), ext, len(data), name
+
+
+@app.get("/api/subjects/{key}/works")
+def list_works(key: str, user: User = Depends(current_user)):
+    check_key(key)
+    with ro_for(user) as con:
+        my_subject(con, user.username, key)
+        if not works.supports(key):
+            raise HTTPException(404, "Works are only for language subjects")
+        rows = works.rows_for(con, user.username, key)
+        states = {r["topic_code"]: r for r in db.rows(con, "SELECT topic_code, coverage FROM topic_state WHERE username=? AND subject=?", (user.username, key))}
+        out = []
+        for r in rows:
+            p = works.public(con, r)
+            p["coverage"] = int((states.get(p["code"]) or {}).get("coverage") or 0)
+            out.append(p)
+        return {"works": out, "kinds": works.KINDS, "parts": works.PARTS, "max_mb": works.MAX_BYTES // (1024 * 1024),
+                "used_mb": round(works.used_bytes(con, user.username) / 1048576, 1), "quota_mb": works.QUOTA_BYTES // 1048576}
+
+
+@app.post("/api/subjects/{key}/works")
+async def add_work(key: str, request: Request, title: str = Query(max_length=200), author: str | None = Query(default=None, max_length=200),
+                   kind: str = Query(default="other", max_length=20), part: str = Query(default="undecided", max_length=20),
+                   filename: str | None = Query(default=None, max_length=200), user: User = Depends(current_user)):
+    """Add a work. The request body is the file itself (optional: a work can be added without a copy)."""
+    check_key(key)
+    meta = _work_meta(title, author, kind, part, None)
+    data = await _read_upload(request)
+    with tx_for(user) as con:
+        my_subject(con, user.username, key)
+        if not works.supports(key):
+            raise HTTPException(404, "Works are only for language subjects")
+        if con.execute("SELECT COUNT(*) FROM works WHERE username=?", (user.username,)).fetchone()[0] >= works.MAX_WORKS:
+            raise HTTPException(422, f"You can keep up to {works.MAX_WORKS} works. Remove one first.")
+        stored = (None, None, None, None)
+        if data:
+            stored = _accept_file(con, user.username, data, filename)
+        try:
+            cur = con.execute("""INSERT INTO works(username, subject, title, author, kind, part, stored_name, file_ext, file_size, file_name, created_at)
+                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (user.username, key, meta["title"], meta.get("author"), meta["kind"], meta["part"], *stored, now_iso()))
+        except Exception:
+            works.remove_file(user.username, stored[0])
+            raise
+        w = db.one(con, "SELECT * FROM works WHERE id=?", (cur.lastrowid,))
+        return {"work": works.public(con, w), "replan_suggested": True}
+
+
+class WorkPatch(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    author: str | None = Field(default=None, max_length=200)
+    kind: str | None = Field(default=None, max_length=20)
+    part: str | None = Field(default=None, max_length=20)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+@app.patch("/api/works/{wid}")
+def patch_work(wid: int, body: WorkPatch, user: User = Depends(current_user)):
+    meta = _work_meta(body.title, body.author, body.kind, body.part, body.notes)
+    with tx_for(user) as con:
+        _work(con, user.username, wid)
+        if meta:
+            con.execute(f"UPDATE works SET {','.join(k + '=?' for k in meta)} WHERE id=?", (*meta.values(), wid))
+        return {"work": works.public(con, _work(con, user.username, wid))}
+
+
+@app.put("/api/works/{wid}/file")
+async def put_work_file(wid: int, request: Request, filename: str | None = Query(default=None, max_length=200), user: User = Depends(current_user)):
+    data = await _read_upload(request)
+    if not data:
+        raise HTTPException(422, "No file received")
+    with tx_for(user) as con:
+        w = _work(con, user.username, wid)
+        stored = _accept_file(con, user.username, data, filename, replacing=w["file_size"] or 0)
+        con.execute("UPDATE works SET stored_name=?, file_ext=?, file_size=?, file_name=? WHERE id=?", (*stored, wid))
+        old = w["stored_name"]
+        out = works.public(con, _work(con, user.username, wid))
+    works.remove_file(user.username, old)
+    return {"work": out}
+
+
+@app.delete("/api/works/{wid}/file")
+def delete_work_file(wid: int, user: User = Depends(current_user)):
+    with tx_for(user) as con:
+        w = _work(con, user.username, wid)
+        con.execute("UPDATE works SET stored_name=NULL, file_ext=NULL, file_size=NULL, file_name=NULL WHERE id=?", (wid,))
+    works.remove_file(user.username, w["stored_name"])
+    return {"ok": True}
+
+
+@app.delete("/api/works/{wid}")
+def delete_work(wid: int, user: User = Depends(current_user)):
+    with tx_for(user) as con:
+        w = _work(con, user.username, wid)
+        code = f"W{wid}"
+        con.execute("DELETE FROM works WHERE id=?", (wid,))
+        con.execute("DELETE FROM topic_state WHERE username=? AND subject=? AND topic_code=?", (user.username, w["subject"], code))
+        con.execute("DELETE FROM tasks WHERE username=? AND subject=? AND topic_code=? AND status='todo'", (user.username, w["subject"], code))
+    works.remove_file(user.username, w["stored_name"])
+    return {"ok": True, "replan_suggested": True}
+
+
+@app.get("/api/works/{wid}/file")
+def get_work_file(wid: int, user: User = Depends(current_user)):
+    with ro_for(user) as con:
+        w = _work(con, user.username, wid)
+    path = works.file_path(user.username, w["stored_name"]) if w["stored_name"] else None
+    if not path:
+        raise HTTPException(404, "No file for this work")
+    ext = w["file_ext"]
+    name = re.sub(r'[\r\n"\\/]', " ", w["file_name"] or f"work.{ext}")[:150]
+    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"}
+    if ext in works.INLINE:
+        headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; object-src 'self'; frame-ancestors 'self'; sandbox"
+        return FileResponse(path, media_type=works.INLINE[ext], filename=name, content_disposition_type="inline", headers=headers)
+    headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    return FileResponse(path, media_type=works.DOWNLOAD.get(ext, "application/octet-stream"), filename=name, content_disposition_type="attachment", headers=headers)
 
 
 @app.get("/api/subjects/{key}/papers")
@@ -891,7 +1090,7 @@ def export(user: User = Depends(current_user)):
     out: dict = {"exported_at": now_iso(), "username": user.username}
     with ro_for(user) as con:
         out["profile"] = db.one(con, "SELECT username, display_name, email, created_at, settings FROM users WHERE username=?", (user.username,))
-        for table in ("user_subjects", "topic_state", "tasks", "day_overrides", "dismissed_issues", "grade_log", "paper_attempts", "resource_marks"):
+        for table in ("user_subjects", "topic_state", "tasks", "day_overrides", "dismissed_issues", "grade_log", "paper_attempts", "resource_marks", "works"):
             out[table] = db.rows(con, f"SELECT * FROM {table} WHERE username=?", (user.username,))
     return JSONResponse(out, headers={"Content-Disposition": f'attachment; filename="ibgod-{user.username}.json"'})
 
@@ -902,10 +1101,12 @@ class ConfirmIn(BaseModel):
 
 @app.post("/api/account/delete")
 def delete_account(body: ConfirmIn, user: User = Depends(current_user)):
+    import shutil
     with tx_for(user) as con:
         con.execute("DELETE FROM users WHERE username=?", (user.username,))
         con.execute("DELETE FROM usage_log WHERE username=?", (user.username,))
         con.execute("DELETE FROM meta WHERE key=?", (f"plan:{user.username}",))
+    shutil.rmtree(works.user_dir(user.username), ignore_errors=True)  # uploaded works
     auth.forget(user.username)
     return {"ok": True}
 

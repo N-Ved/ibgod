@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from . import access, catalog, db
+from . import access, catalog, db, works
 from .knowledge import GRADE_BANDS
 
 KIND_ORDER = {"review": 0, "learn": 1, "practice": 2, "mixed": 3, "paper": 4, "paper_review": 5, "coursework": 6, "final": 7, "custom": 8}
@@ -63,7 +63,10 @@ def load_profile(con: sqlite3.Connection, username: str) -> dict:
     if not (isinstance(week, list) and len(week) == 7):
         week = list(DEFAULT_WEEK)
     week = [max(0, min(720, int(x or 0))) for x in week]
-    return {"user": user, "settings": settings, "subjects": subs, "states": states, "month": month, "year": year, "exam_start": exam_start,
+    work_rows: dict[str, list[dict]] = {}
+    for r in db.rows(con, "SELECT * FROM works WHERE username=? ORDER BY id", (username,)):
+        work_rows.setdefault(r["subject"], []).append(r)
+    return {"works": work_rows, "user": user, "settings": settings, "subjects": subs, "states": states, "month": month, "year": year, "exam_start": exam_start,
             "exam_end": max(win_end, exam_start + timedelta(days=21)), "week": week}
 
 
@@ -74,7 +77,8 @@ def subject_end(profile: dict, sub: dict) -> date:
 
 def active_topics(profile: dict, sub: dict) -> list[dict]:
     out = []
-    for t in catalog.topics_for(sub["subject"], sub["level"]):
+    extra = works.as_topics(profile.get("works", {}).get(sub["subject"], [])) if works.supports(sub["subject"]) else []
+    for t in catalog.topics_for(sub["subject"], sub["level"]) + extra:
         st = profile["states"].get((sub["subject"], t["code"]))
         enabled = t["default_on"] if (st is None or st["enabled"] is None) else bool(st["enabled"])
         if not enabled:
@@ -182,6 +186,8 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
     mean_hours = (sum(hrs) / len(hrs)) if hrs else None
 
     def size_of(t: dict) -> float:
+        if t.get("size_hint"):
+            return t["size_hint"]  # a whole literary work is a bigger unit of study than one syllabus topic
         if mean_hours and t.get("unit_hours"):
             return max(0.6, min(1.6, (t["unit_hours"] / max(1, t["unit_size"])) / mean_hours))
         return 1.0
@@ -320,6 +326,10 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
         f_end = min(0.88, f_end + 0.1)
     drafts: list[Draft] = []
     tips = {"learn": "Read actively: try a few questions first, explain each idea in your own words, and finish with a 5-minute brain dump from memory.",
+            "work_learn": "Read actively with a pencil: mark key passages, techniques and recurring images, and note how the work connects to the global issues and themes you might write about. Finish by listing 5 quotations you want to remember.",
+            "work_consolidate": "You have read this in class. Re-read the key passages, then from memory list its main themes, techniques and 5 quotations, and fill the gaps from your notes.",
+            "work_practice": "Write a timed paragraph or plan an essay on this work (Paper 2 style: compare it with another work you study). Use quotations from memory, then check them against the text.",
+            "work_review": "From memory: themes, characters or speakers, key techniques and 5 quotations. Then check against your notes and re-learn what you missed.",
             "consolidate": "You have met this in class. Close the notes, brain-dump what you remember, fill the gaps from your notes, then explain the main idea aloud.",
             "practice": "Exam questions on this topic. Mark with the markscheme and log every lost mark in your error log.",
             "practice_cold": "Start with a 5-minute brain dump of the topic, then exam questions. Re-read notes only for what you could not recall. Log every lost mark.",
@@ -330,22 +340,27 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
     early = {c: int((j / max(1, len(review_only))) * 0.25 * last) for j, c in enumerate(review_only)}
     for i, t in enumerate(topics):
         code = t["code"]
-        tname = f"{code} {t['name']}" if code and not t["name"].startswith(code) else t["name"]
+        tname = t["name"] if t.get("work") else (f"{code} {t['name']}" if code and not t["name"].startswith(code) else t["name"])
+        wk = t.get("work")
         ideal_day = early[code] if code in early else int((i / n) * f_end * last)
         parent: Draft | None = None
         if code in learn:
-            verb = "Consolidate" if t["coverage"] == 1 else "Learn"
-            parent = Draft(key, "learn", f"{verb}: {tname}", learn[code], ideal_day, tips["consolidate" if t["coverage"] == 1 else "learn"], code, {"phase": "content"}, last=last)
+            if wk:
+                verb, tip = ("Re-read key passages", tips["work_consolidate"]) if t["coverage"] == 1 else ("Read and annotate", tips["work_learn"])
+            else:
+                verb, tip = ("Consolidate", tips["consolidate"]) if t["coverage"] == 1 else ("Learn", tips["learn"])
+            parent = Draft(key, "learn", f"{verb}: {tname}", learn[code], ideal_day, tip, code, {"phase": "content"}, last=last)
             drafts.append(parent)
         if code in practice:
-            pr = Draft(key, "practice", f"Practise: {tname}", practice[code], ideal_day + 1, tips["practice" if parent else "practice_cold"], code, {"phase": "content"}, last=last)
+            pr = Draft(key, "practice", f"{'Write about' if wk else 'Practise'}: {tname}", practice[code], ideal_day + 1,
+                       tips["work_practice"] if wk else tips["practice" if parent else "practice_cold"], code, {"phase": "content"}, last=last)
             if parent:
                 parent.children.append((1, pr))
             else:
                 parent = pr
                 drafts.append(pr)
         for kk in rounds_for(t, n_reviews):
-            rv = Draft(key, "review", f"Review: {tname}", rev_len, ideal_day + gaps[kk - 1], tips["review"], code, {"phase": "review", "n": kk}, last=last)
+            rv = Draft(key, "review", f"Review: {tname}", rev_len, ideal_day + gaps[kk - 1], tips["work_review"] if wk else tips["review"], code, {"phase": "review", "n": kk}, last=last)
             if parent:
                 parent.children.append((gaps[kk - 1], rv))
             else:

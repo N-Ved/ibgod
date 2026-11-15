@@ -6,7 +6,7 @@ const PRESETS = {
   Steady: [90, 90, 90, 90, 0, 180, 180],
   Intensive: [150, 120, 150, 120, 0, 270, 210],
 };
-const STEPS = ['Exams', 'Subjects', 'Grades', 'Textbooks', 'Time', 'Review'];
+const STEPS = ['Exams', 'Subjects', 'Grades', 'Taught so far', 'Textbooks', 'Time', 'Review'];
 
 function defaultSession(today) {
   const d = new Date(today);
@@ -77,11 +77,20 @@ export function Onboarding({ editing }) {
     textbook_id: s.textbook_id, textbook_other: s.textbook_other || '', exam_date: s.exam_date })));
   const [week, setWeek] = useState(me.settings.weekly_minutes || PRESETS.Steady);
   const [books, setBooks] = useState({});
+  const [units, setUnits] = useState({});
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { attempt(() => api('/api/catalog')).then((d) => d && setCatalog(d.subjects)); }, []);
   useEffect(() => {
     if (step !== 3) return;
+    subs.forEach((s) => {
+      const k = s.subject + '|' + s.level;
+      if (units[k] !== undefined || s.subject.startsWith('custom:')) return;
+      api(`/api/catalog/units?subject=${encodeURIComponent(s.subject)}&level=${s.level}`).then((d) => setUnits((u) => ({ ...u, [k]: d.units }))).catch(() => setUnits((u) => ({ ...u, [k]: [] })));
+    });
+  }, [step, subs.length]);
+  useEffect(() => {
+    if (step !== 4) return;
     subs.forEach((s) => {
       const k = s.subject + '|' + s.level;
       if (books[k] !== undefined || s.subject.startsWith('custom:')) return;
@@ -103,13 +112,13 @@ export function Onboarding({ editing }) {
   const years = [];
   for (let y = new Date(me.today).getFullYear(); y <= new Date(me.today).getFullYear() + 3; y++) years.push(y);
   const hl = subs.filter((s) => s.level === 'HL').length;
-  const canNext = step === 1 ? subs.length > 0 : step === 4 ? week.reduce((a, b) => a + b, 0) >= 60 : true;
+  const canNext = step === 1 ? subs.length > 0 : step === 5 ? week.reduce((a, b) => a + b, 0) >= 60 : true;
 
   const submit = async () => {
     setBusy(true);
     const body = { display_name: name.trim() || null, session_month: month, session_year: Number(year), weekly_minutes: week, exam_start: me.settings.exam_start || null,
       subjects: subs.map((s) => ({ subject: s.subject, level: s.level, current_grade: s.current_grade, target_grade: Math.max(s.target_grade, s.current_grade), textbook_id: s.textbook_id || null,
-        textbook_other: s.textbook_other || null, exam_date: s.exam_date || null })) };
+        textbook_other: s.textbook_other || null, exam_date: s.exam_date || null, covered_units: s.covered_units && s.covered_units.length ? s.covered_units : null })) };
     const res = await attempt(() => api('/api/setup', { method: 'POST', body }));
     setBusy(false);
     if (!res) return;
@@ -147,6 +156,18 @@ export function Onboarding({ editing }) {
       </div>`)}
     </div>`,
     () => html`<div class="stack">
+      <div><h1>What has your class already taught?</h1><p class="muted">Tick the units you have covered in class so far. Your plan starts them with a short consolidation and practice instead of teaching them from scratch. Skip this if you are just starting the course. You can fine-tune each topic later in the subject's checklist.</p></div>
+      ${subs.map((s) => { const list = units[s.subject + '|' + s.level]; const chosen = new Set(s.covered_units || []);
+        const toggle = (code) => update(s.subject, { covered_units: chosen.has(code) ? [...chosen].filter((c) => c !== code) : [...chosen, code] });
+        return html`<div class="card stack tight" key=${s.subject}>
+        <div class="row"><strong class="grow">${s.name}</strong><span class="chip">${s.level}</span>
+          ${list && list.length ? html`<button type="button" class="btn sm ghost" onClick=${() => update(s.subject, { covered_units: chosen.size === list.length ? [] : list.map((u) => u.code) })}>${chosen.size === list.length ? 'Clear' : 'All'}</button>` : null}</div>
+        ${s.subject.startsWith('custom:') ? html`<div class="hint">Set this one up in its checklist after setup.</div>` : list === undefined ? html`<div class="hint"><span class="spinner"></span> Loading units…</div>` :
+          html`<div class="pick-list">${list.map((u) => html`<button type="button" key=${u.code} class=${'pick' + (chosen.has(u.code) ? ' on' : '')} aria-pressed=${chosen.has(u.code)} onClick=${() => toggle(u.code)}>
+            <span class="grow"><div><strong>${u.name}</strong></div><div class="hint">${u.topics} topic${u.topics === 1 ? '' : 's'}</div></span>${chosen.has(u.code) ? html`<${Icon} name="check" />` : null}</button>`)}</div>`}
+      </div>`; })}
+    </div>`,
+    () => html`<div class="stack">
       <div><h1>Which textbooks do you use in class?</h1><p class="muted">The plan will point you to the right pages of your own book. Skip any you are unsure about.</p></div>
       ${subs.map((s) => { const list = books[s.subject + '|' + s.level]; return html`<div class="card stack tight" key=${s.subject}>
         <div class="row"><strong class="grow">${s.name}</strong><span class="chip">${s.level}</span></div>
@@ -168,7 +189,7 @@ export function Onboarding({ editing }) {
         <div class="row"><span class="muted grow">Exam session</span><strong>${month} ${year}</strong></div>
         <div class="row"><span class="muted grow">Study time</span><strong>${fmtHours(week.reduce((a, b) => a + b, 0))} per week</strong></div>
         <hr class="divider" />
-        ${subs.map((s) => html`<div class="row" key=${s.subject}><span class="grow">${s.name} <span class="chip">${s.level}</span></span><strong class="tnum">${s.current_grade} → ${Math.max(s.target_grade, s.current_grade)}</strong></div>`)}
+        ${subs.map((s) => html`<div class="row" key=${s.subject}><span class="grow">${s.name} <span class="chip">${s.level}</span>${s.covered_units && s.covered_units.length ? html` <span class="chip ok">${s.covered_units.length} unit${s.covered_units.length === 1 ? '' : 's'} taught</span>` : null}</span><strong class="tnum">${s.current_grade} → ${Math.max(s.target_grade, s.current_grade)}</strong></div>`)}
       </div>
       <div class="banner"><${Icon} name="bulb" /><div>The plan covers each topic once, practises it with real exam questions, brings it back at growing intervals (spaced retrieval), and moves to timed past papers as exams approach. Subjects with bigger grade gaps and HL subjects get more time.</div></div>
     </div>`,

@@ -56,7 +56,9 @@ function TaskResources({ task }) {
   const papers = (data.files || []).filter((r) => r.kind !== 'markscheme');
   const schemes = (data.files || []).filter((r) => r.kind === 'markscheme');
   const practice = task.kind === 'practice' || task.kind === 'review';
-  const groups = practice
+  const groups = t.yours !== undefined
+    ? [['Your copy', t.yours], ['Study guides', t.notes]]
+    : practice
     ? [['Exam questions', t.questions], ['Notes to check against', t.notes], ['Textbook', t.textbook], ['Videos', t.videos]]
     : [['Notes', t.notes], ['Textbook', t.textbook], ['Videos', t.videos], ['Exam questions', t.questions], ['Study site pages', t.pages]];
   const any = papers.length || schemes.length || groups.some(([, g]) => g && g.length);

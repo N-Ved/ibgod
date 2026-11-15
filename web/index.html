@@ -13,6 +13,19 @@
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/icon-180.png">
 <link rel="stylesheet" href="/app.css">
+<!-- fetch every module at once instead of discovering them one import at a time (fewer round trips on phones) -->
+<link rel="modulepreload" href="/vendor/preact-htm.js">
+<link rel="modulepreload" href="/js/app.js">
+<link rel="modulepreload" href="/js/apps.js">
+<link rel="modulepreload" href="/js/core.js">
+<link rel="modulepreload" href="/js/library.js">
+<link rel="modulepreload" href="/js/onboarding.js">
+<link rel="modulepreload" href="/js/plan.js">
+<link rel="modulepreload" href="/js/settings.js">
+<link rel="modulepreload" href="/js/subjects.js">
+<link rel="modulepreload" href="/js/tasks.js">
+<link rel="modulepreload" href="/js/techniques.js">
+<link rel="modulepreload" href="/js/today.js">
 </head>
 <body>
 <div id="app"><div class="boot"><div class="boot-logo">IB God</div><div class="boot-sub">Loading your study plan…</div></div></div>

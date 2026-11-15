@@ -179,6 +179,24 @@ CREATE TABLE IF NOT EXISTS usage_log(
   ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_user ON usage_log(username, action, ts);
+
+-- ── language subjects: the works a student studies (see works.py) ──
+CREATE TABLE IF NOT EXISTS works(
+  id INTEGER PRIMARY KEY,
+  username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+  subject TEXT NOT NULL,
+  title TEXT NOT NULL,
+  author TEXT,
+  kind TEXT NOT NULL DEFAULT 'other',
+  part TEXT NOT NULL DEFAULT 'undecided',
+  notes TEXT,
+  file_name TEXT,
+  file_ext TEXT,
+  file_size INTEGER,
+  stored_name TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS works_user ON works(username, subject);
 """
 
 _init_lock = threading.Lock()
