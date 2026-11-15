@@ -214,6 +214,9 @@ def init() -> None:
                 for t in ("chunks", "res_fts", "resources"):
                     con.execute(f"DROP TABLE IF EXISTS {t}")
             con.executescript(SCHEMA)
+            cols = {r[1] for r in con.execute("PRAGMA table_info(topic_state)")}
+            if "coverage" not in cols:  # 0 not started .. 4 secure (see planner.COVERAGE)
+                con.execute("ALTER TABLE topic_state ADD COLUMN coverage INTEGER NOT NULL DEFAULT 0")
             con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA_VERSION),))
         finally:
             con.close()

@@ -394,7 +394,7 @@ def get_subject(key: str, user: User = Depends(current_user)):
                     continue
                 st = states.get(t["code"]) or {}
                 ts.append({"code": t["code"], "name": st.get("custom_name") or t["name"], "default_name": t["name"], "hl_only": t["hl_only"], "optional": t["optional"],
-                           "enabled": t["default_on"] if st.get("enabled") is None else bool(st["enabled"]), "confidence": st.get("confidence")})
+                           "enabled": t["default_on"] if st.get("enabled") is None else bool(st["enabled"]), "confidence": st.get("confidence"), "coverage": int(st.get("coverage") or 0)})
             if ts:
                 units.append({"code": u["code"], "name": u["name"], "topics": ts})
         tb = db.one(con, f"SELECT {search.RES_COLS} FROM resources r WHERE r.id=?", (row["textbook_id"],)) if row["textbook_id"] else None
@@ -410,6 +410,7 @@ def get_subject(key: str, user: User = Depends(current_user)):
 class TopicIn(BaseModel):
     enabled: bool | None = None
     confidence: int | None = Field(default=None, ge=0, le=5)
+    coverage: int | None = Field(default=None, ge=0, le=4)
     custom_name: str | None = Field(default=None, max_length=120)
 
 
@@ -424,10 +425,31 @@ def put_topic(key: str, code: str, body: TopicIn, user: User = Depends(current_u
         enabled = st.get("enabled") if body.enabled is None else int(body.enabled)
         conf = st.get("confidence") if body.confidence is None else (body.confidence or None)
         name = st.get("custom_name") if body.custom_name is None else _clean_text(body.custom_name, 120)
-        con.execute("""INSERT INTO topic_state(username, subject, topic_code, enabled, confidence, custom_name) VALUES(?,?,?,?,?,?)
-                       ON CONFLICT(username, subject, topic_code) DO UPDATE SET enabled=excluded.enabled, confidence=excluded.confidence, custom_name=excluded.custom_name""",
-                    (user.username, key, code, enabled, conf, name))
+        cov = int(st.get("coverage") or 0) if body.coverage is None else body.coverage
+        con.execute("""INSERT INTO topic_state(username, subject, topic_code, enabled, confidence, custom_name, coverage) VALUES(?,?,?,?,?,?,?)
+                       ON CONFLICT(username, subject, topic_code) DO UPDATE SET enabled=excluded.enabled, confidence=excluded.confidence, custom_name=excluded.custom_name, coverage=excluded.coverage""",
+                    (user.username, key, code, enabled, conf, name, cov))
     return {"ok": True}
+
+
+class CoverageBulk(BaseModel):
+    level: int = Field(ge=0, le=4)
+    unit: str | None = Field(default=None, max_length=20)  # a unit code, or null for the whole subject
+
+
+@app.put("/api/subjects/{key}/coverage")
+def put_coverage_bulk(key: str, body: CoverageBulk, user: User = Depends(current_user)):
+    """Set the checklist level for every topic in a unit (or the whole subject) in one go."""
+    check_key(key)
+    with db.tx() as con:
+        row = my_subject(con, user.username, key)
+        topics = [t for t in catalog.topics_for(key, row["level"]) if body.unit is None or t["unit_code"] == body.unit]
+        if not topics:
+            raise HTTPException(404, "Unknown unit")
+        for t in topics:
+            con.execute("""INSERT INTO topic_state(username, subject, topic_code, coverage) VALUES(?,?,?,?)
+                           ON CONFLICT(username, subject, topic_code) DO UPDATE SET coverage=excluded.coverage""", (user.username, key, t["code"], body.level))
+    return {"ok": True, "topics": len(topics)}
 
 
 _topic_cache: dict[tuple, tuple[float, dict]] = {}
@@ -563,6 +585,23 @@ def replan(body: ReplanIn, user: User = Depends(current_user)):
     return {"summary": summary, "issues": issues["issues"], "dismissed": issues["dismissed"]}
 
 
+class ClearIn(BaseModel):
+    reset_topics: bool = False
+
+
+@app.post("/api/plan/clear")
+def clear_plan(body: ClearIn, user: User = Depends(current_user)):
+    """Start from scratch: remove every task (done, skipped, planned, manual). Subjects, grades, time settings and day-offs stay."""
+    with db.tx() as con:
+        n = con.execute("DELETE FROM tasks WHERE username=?", (user.username,)).rowcount
+        con.execute("DELETE FROM dismissed_issues WHERE username=?", (user.username,))
+        con.execute("DELETE FROM meta WHERE key=?", (f"plan:{user.username}",))
+        if body.reset_topics:
+            con.execute("UPDATE topic_state SET coverage=0, confidence=NULL WHERE username=?", (user.username,))
+        after = planner.evaluate(con, user.username)
+    return {"removed": n, "issues": after["issues"], "dismissed": after["dismissed"]}
+
+
 class TaskIn(BaseModel):
     date: str
     title: str = Field(min_length=1, max_length=200)
@@ -635,6 +674,11 @@ def patch_task(tid: int, body: TaskPatch, user: User = Depends(current_user)):
         if body.status and body.status != t["status"]:
             sets += ["status=?", "done_at=?"]
             params += [body.status, now_iso() if body.status == "done" else None]
+            if body.status == "done" and t["topic_code"] and t["subject"] and t["kind"] in ("learn", "practice") and not t["topic_code"].startswith("unit:"):
+                # Finishing the work moves the topic up the checklist (never down), so a cleared plan does not re-teach it.
+                floor = 2 if t["kind"] == "learn" else (3 if body.rating != "hard" else 2)
+                con.execute("""INSERT INTO topic_state(username, subject, topic_code, coverage) VALUES(?,?,?,?)
+                               ON CONFLICT(username, subject, topic_code) DO UPDATE SET coverage=MAX(topic_state.coverage, excluded.coverage)""", (user.username, t["subject"], t["topic_code"], floor))
             if body.status == "done" and t["topic_code"] and t["subject"] and body.rating in ("hard", "easy"):
                 st = db.one(con, "SELECT confidence FROM topic_state WHERE username=? AND subject=? AND topic_code=?", (user.username, t["subject"], t["topic_code"]))
                 conf = (st or {}).get("confidence") or 3

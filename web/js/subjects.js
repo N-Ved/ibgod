@@ -1,8 +1,18 @@
 // Subjects: the grade path, syllabus topics with matched materials, past papers and all resources.
 import { html, useState, useEffect, api, useStore, useLoad, attempt, toast, Icon, Modal, Bar, Spinner, ErrorBox, GradePick, Confidence, ResourceLink, ResourceGroup,
-  fmtMin, fmtDate, subjectClass, plural, go, refreshMe } from './core.js';
+  fmtMin, fmtDate, subjectClass, plural, pct, go, refreshMe } from './core.js';
 import { createTask } from './tasks.js';
 import { replanNow } from './today.js';
+
+// Checklist levels: how far a topic has moved through learn -> retrieve -> space (see "Study methods").
+export const STAGES = [
+  { n: 0, name: 'Not started', plan: 'Learn it, practise it, then review it.' },
+  { n: 1, name: 'Introduced', plan: 'Taught in class, not yet revised: a short consolidation, practice, then reviews.' },
+  { n: 2, name: 'Familiar', plan: 'You follow the notes but cannot recall them unaided: retrieval practice, then reviews.' },
+  { n: 3, name: 'Revised', plan: 'You have recalled it from memory and answered exam questions: spaced reviews only.' },
+  { n: 4, name: 'Secure', plan: 'Recalled correctly on several days, including timed: one maintenance review.' },
+];
+const STAGE_TONE = ['', 'info', 'warn', 'primary', 'ok'];
 
 function suggestReplan(text) {
   toast(text, { ms: 9000, action: { label: 'Re-plan now', run: () => replanNow(true) } });
@@ -84,6 +94,8 @@ function TopicRow({ subjectKey, t, done, onChange }) {
     ${t.optional ? html`<input type="checkbox" checked=${t.enabled} aria-label=${'I study ' + t.name} onChange=${(e) => save({ enabled: e.target.checked })} />` : null}
     <button class="topic-name" onClick=${() => setOpen(!open)} aria-expanded=${open}><span class="muted tnum">${t.code}</span> ${t.name.startsWith(t.code) ? t.name.slice(t.code.length) : t.name}
       ${t.hl_only ? html` <span class="chip">HL</span>` : null}${done ? html` <span class="chip ok">${plural(done, 'session')} done</span>` : null}</button>
+    ${t.enabled ? html`<select class=${'input cov cov' + (t.coverage || 0)} aria-label=${'Coverage of ' + t.name} title=${STAGES[t.coverage || 0].plan} value=${t.coverage || 0}
+      onChange=${(e) => save({ coverage: Number(e.target.value) })}>${STAGES.map((st) => html`<option value=${st.n}>${st.name}</option>`)}</select>` : null}
     ${t.enabled ? html`<${Confidence} value=${t.confidence || 0} onChange=${(c) => save({ confidence: c })} />` : null}
     ${open ? html`<div class="topic-res stack tight">
       ${!res ? html`<div class="hint"><span class="spinner"></span> Finding materials…</div>` : any ? html`
@@ -102,15 +114,37 @@ function TopicsTab({ d, setData }) {
   const rated = d.units.flatMap((u) => u.topics).filter((t) => t.enabled && t.confidence).length;
   const total = d.units.flatMap((u) => u.topics).filter((t) => t.enabled).length;
   const patch = (code, body) => {
-    setData({ ...d, units: d.units.map((u) => ({ ...u, topics: u.topics.map((t) => (t.code !== code ? t : { ...t, ...(body.enabled !== undefined ? { enabled: body.enabled } : {}), ...(body.confidence !== undefined ? { confidence: body.confidence || null } : {}),
-      ...(body.custom_name !== undefined ? { name: body.custom_name || t.default_name } : {}) })) })) });
+    setData((cur) => ({ ...cur, units: cur.units.map((u) => ({ ...u, topics: u.topics.map((t) => (t.code !== code ? t : { ...t, ...(body.enabled !== undefined ? { enabled: body.enabled } : {}), ...(body.confidence !== undefined ? { confidence: body.confidence || null } : {}),
+      ...(body.coverage !== undefined ? { coverage: body.coverage } : {}), ...(body.custom_name !== undefined ? { name: body.custom_name || t.default_name } : {}) })) })) }));
     if (body.enabled !== undefined) suggestReplan('Topic list changed. Re-plan to update your schedule.');
+    else if (body.coverage !== undefined) suggestReplan('Checklist updated. Re-plan so covered topics are not taught again.');
+  };
+  const all = d.units.flatMap((u) => u.topics).filter((t) => t.enabled);
+  const counts = STAGES.map((st) => all.filter((t) => (t.coverage || 0) === st.n).length);
+  const bulk = async (unit, level) => {
+    const res = await attempt(() => api(`/api/subjects/${encodeURIComponent(d.subject.key)}/coverage`, { method: 'PUT', body: { level, unit } }));
+    if (!res) return;
+    setData((cur) => ({ ...cur, units: cur.units.map((u) => (unit === null || u.code === unit ? { ...u, topics: u.topics.map((t) => (t.enabled ? { ...t, coverage: level } : t)) } : u)) }));
+    suggestReplan('Checklist updated. Re-plan so covered topics are not taught again.');
   };
   return html`<div class="stack">
+    <div class="card stack">
+      <div class="card-title"><${Icon} name="check" /><h2 class="grow">Master checklist</h2>
+        <select class="input" style=${{ width: 'auto' }} aria-label="Set every topic to" value="" onChange=${(e) => { if (e.target.value !== '') { bulk(null, Number(e.target.value)); e.target.value = ''; } }}>
+          <option value="">Set all topics to…</option>${STAGES.map((st) => html`<option value=${st.n}>${st.name}</option>`)}</select></div>
+      <div class="hint">Mark how far you have got with each topic. The next re-plan skips what you have already done and puts the time where it is still needed.</div>
+      <div class="split">${counts.map((c, i) => html`<i key=${i} class=${'cov-seg cov' + i} style=${{ width: pct(c, all.length) + '%' }} title=${STAGES[i].name + ': ' + c}></i>`)}</div>
+      <div class="legend">${STAGES.map((st, i) => html`<span class=${'cov-key cov' + i} key=${st.n}>${st.name} ${counts[i]}</span>`)}</div>
+      <details><summary class="small muted" style=${{ cursor: 'pointer' }}>What each level means and what the plan does with it</summary>
+        <div class="stack tight" style=${{ marginTop: '8px' }}>${STAGES.map((st) => html`<div class="small" key=${st.n}><span class=${'chip ' + STAGE_TONE[st.n]}>${st.name}</span> ${st.plan}</div>`)}
+          <div class="hint">The levels follow how memory is built: first meet the idea, then retrieve it from memory (retrieval practice), then return to it at growing gaps (spaced relearning). Updating this honestly beats re-reading: mark a topic "Revised" only when you could recall it without the notes. Finishing a Learn or Practise session in the plan moves a topic up automatically.</div></div></details>
+    </div>
     <div class="banner"><${Icon} name="bulb" /><div class="grow">Rate each topic from 1 (lost) to 5 (could teach it). The plan gives weak topics more time and puts them earlier. <strong>${rated} of ${total} rated.</strong> Tap a topic to see notes, textbook pages, videos and exam questions for it.</div>
       ${rated ? html`<button class="btn sm" onClick=${() => replanNow(true)}>Re-plan with ratings</button>` : null}</div>
     ${d.units.map((u) => html`<div class="card" key=${u.code}>
-      <div class="card-title"><h3 class="grow">${u.name}</h3></div>
+      <div class="card-title"><h3 class="grow">${u.name}</h3>
+        <select class="input" style=${{ width: 'auto' }} aria-label=${'Set all of ' + u.name + ' to'} value="" onChange=${(e) => { if (e.target.value !== '') { bulk(u.code, Number(e.target.value)); e.target.value = ''; } }}>
+          <option value="">Set unit to…</option>${STAGES.map((st) => html`<option value=${st.n}>${st.name}</option>`)}</select></div>
       ${u.topics.map((t) => html`<${TopicRow} key=${t.code} subjectKey=${d.subject.key} t=${t} done=${d.done_by_topic[t.code]} onChange=${(body) => patch(t.code, body)} />`)}
     </div>`)}
   </div>`;

@@ -1,5 +1,5 @@
 // The schedule: a week you can rearrange, the issues your changes create, and re-planning.
-import { html, useState, useEffect, api, useStore, useLoad, Icon, Modal, Bar, Spinner, ErrorBox, fmtMin, fmtDate, fmtHours, addDays, mondayOf, DAYS_LONG, weekday, plural, go } from './core.js';
+import { html, useState, useEffect, api, store, toast, attempt, useStore, useLoad, Icon, Modal, Bar, Spinner, ErrorBox, fmtMin, fmtDate, fmtHours, addDays, mondayOf, DAYS_LONG, weekday, plural, go } from './core.js';
 import { TaskCard, IssueRow, patchTask, createTask, setDay, resetDay } from './tasks.js';
 import { replanNow } from './today.js';
 
@@ -39,6 +39,23 @@ function AddTask({ date, onClose, onSaved }) {
     <div class="field"><label for="at-sub">Subject</label><select id="at-sub" class="input" value=${form.subject} onChange=${set('subject')}><option value="">General / none</option>${me.subjects.map((s) => html`<option value=${s.subject}>${s.name}</option>`)}</select></div>
     <div class="field"><label for="at-detail">Notes (optional)</label><input id="at-detail" class="input" maxlength="600" value=${form.detail} onInput=${set('detail')} /></div>
     <div class="hint">Tasks you add yourself stay exactly where you put them when the plan is rebuilt.</div>
+  <//>`;
+}
+
+function ClearPlan({ onClose, onDone }) {
+  const [resetTopics, setResetTopics] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    const res = await attempt(() => api('/api/plan/clear', { method: 'POST', body: { reset_topics: resetTopics } }));
+    setBusy(false);
+    if (res) { store.set({ issueCount: res.issues.length }); toast(`Plan cleared (${res.removed} sessions removed).`); onDone(); onClose(); }
+  };
+  return html`<${Modal} title="Clear the whole plan?" onClose=${onClose} footer=${html`<button class="btn" onClick=${onClose}>Cancel</button><button class="btn danger" disabled=${busy} onClick=${run}>${busy ? html`<span class="spinner"></span> Clearing…` : 'Clear plan'}</button>`}>
+    <p>This deletes <strong>every session</strong> in your plan: planned, completed, skipped and ones you added. You can then mark what you have covered in each subject's Topics checklist and build a fresh plan.</p>
+    <ul class="small muted"><li>Kept: your subjects, grades, weekly time, days off, logged paper scores and your checklist.</li><li>Completed sessions are removed from your streak and hours-studied totals.</li></ul>
+    <label class="switch"><input type="checkbox" checked=${resetTopics} onChange=${(e) => setResetTopics(e.target.checked)} /> Also reset my topic checklist and confidence ratings</label>
+    <div class="hint">This cannot be undone.</div>
   <//>`;
 }
 
@@ -88,9 +105,12 @@ export function Plan({ query }) {
     <div class="page-head">
       <div class="grow"><h1>Plan</h1><div class="sub">${data.span.todo ? html`${plural(data.span.todo, 'session')} left, through ${fmtDate(data.span.last, { year: true, day: false })}` : 'No sessions scheduled'} · exams begin ${fmtDate(data.exam_start, { year: true, day: false })}</div></div>
       <button class="btn" onClick=${() => setModal({ type: 'add', date: start < data.today && addDays(start, 6) >= data.today ? data.today : start })}><${Icon} name="plus" size=${17} /> Add task</button>
+      <button class="btn" onClick=${() => setModal({ type: 'clear' })}><${Icon} name="trash" size=${17} /> Clear plan</button>
       <button class="btn primary" onClick=${() => setModal({ type: 'replan' })}><${Icon} name="refresh" size=${17} /> Re-plan</button>
     </div>
 
+    ${!data.span.todo ? html`<div class="banner warn"><${Icon} name="alert" /><div class="grow">Your plan is empty. Mark what you have already covered in each subject's Topics checklist, then build a fresh plan.</div>
+      <a class="btn sm" href="#/subjects">Open checklists</a><button class="btn sm primary" onClick=${() => setModal({ type: 'replan' })}>Build my plan</button></div>` : null}
     ${issues.length || data.dismissed.length ? html`<div class="card">
       <div class="card-title"><${Icon} name="alert" /><h2 class="grow">${issues.length ? plural(issues.length, 'issue') + ' in your plan' : 'No open issues'}</h2>
         ${data.dismissed.length ? html`<button class="btn sm ghost" onClick=${() => setShowDismissed(!showDismissed)}>${showDismissed ? 'Hide' : 'Show'} ${data.dismissed.length} dismissed</button>` : null}</div>
@@ -139,6 +159,7 @@ export function Plan({ query }) {
 
     ${modal && modal.type === 'day' ? html`<${DayEditor} day=${modal.day} onClose=${() => setModal(null)} onSaved=${reload} />` : null}
     ${modal && modal.type === 'add' ? html`<${AddTask} date=${modal.date} onClose=${() => setModal(null)} onSaved=${reload} />` : null}
+    ${modal && modal.type === 'clear' ? html`<${ClearPlan} onClose=${() => setModal(null)} onDone=${reload} />` : null}
     ${modal && modal.type === 'replan' ? html`<${Replan} onClose=${() => setModal(null)} onDone=${reload} />` : null}
   </div>`;
 }

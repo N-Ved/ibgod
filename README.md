@@ -90,6 +90,13 @@ The library index is derived data: if the database is lost, students' plans are 
 - Each topic is learned, practised with exam questions the next day, and reviewed at growing gaps (spaced retrieval).
   Timed papers start once most content is covered; the newest papers are kept for the end; attempted papers are not
   scheduled again.
+- **Master checklist** (subject page, Topics tab): each topic is marked Not started / Introduced / Familiar / Revised / Secure,
+  one by one, per unit or for the whole subject. Re-planning then schedules only what is still needed: Learn + Practise +
+  reviews for new topics, a half-length Consolidate for taught ones, Practise + reviews for familiar ones, reviews only for
+  revised ones and a single maintenance review for secure ones. Finishing a Learn or Practise session raises a topic's level
+  automatically (never lowers it).
+- **Clear plan** (Plan page) deletes every session so a student can start again; subjects, grades, time settings, days off,
+  paper scores and the checklist are kept unless the student also ticks "reset checklist".
 - A fresh plan never exceeds the student's available time. When time is short the programme is thinned and the student
   is told plainly that the hours do not cover the target.
 - Every edit (move, resize, add, day off) is checked. New problems are shown immediately and can be dismissed; a

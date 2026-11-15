@@ -41,6 +41,8 @@ def subject_path(con: sqlite3.Connection, username: str, profile: dict, sub: dic
     pct = [round(100 * a["score"] / a["max_score"]) for a in attempts if a["score"] is not None]
 
     nxt: list[str] = []
+    if topics and all(t["coverage"] == 0 for t in topics):
+        nxt.append("Tick off what your class has already covered in the Topics checklist, then re-plan: covered topics skip straight to practice and review.")
     if unrated and topics:
         nxt.append(f"Rate your confidence on {unrated} topic{'s' if unrated != 1 else ''} below so the plan can weight them properly.")
     if weak:

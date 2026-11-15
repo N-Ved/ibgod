@@ -19,6 +19,11 @@ from . import catalog, db
 from .knowledge import GRADE_BANDS
 
 KIND_ORDER = {"review": 0, "learn": 1, "practice": 2, "mixed": 3, "paper": 4, "paper_review": 5, "coursework": 6, "final": 7, "custom": 8}
+# How far a topic has got through the learn -> retrieve -> space cycle (student's own checklist).
+COVERAGE = ["Not started", "Introduced", "Familiar", "Revised", "Secure"]
+CONSOLIDATE_FACTOR = 0.5  # a topic taught in class needs a shorter first pass than a new one
+
+
 # Days after first study for each review round. With fewer rounds the gaps are longer (one review works best ~10 days out).
 REVIEW_SCHEDULES = {1: (10,), 2: (4, 21), 3: (3, 10, 30)}
 LEARN_END = {1: 0.78, 2: 0.78, 3: 0.75, 4: 0.70, 5: 0.62, 6: 0.50, 7: 0.40}
@@ -74,7 +79,7 @@ def active_topics(profile: dict, sub: dict) -> list[dict]:
         enabled = t["default_on"] if (st is None or st["enabled"] is None) else bool(st["enabled"])
         if not enabled:
             continue
-        out.append({**t, "confidence": (st or {}).get("confidence"), "name": ((st or {}).get("custom_name") or t["name"])})
+        out.append({**t, "confidence": (st or {}).get("confidence"), "coverage": int((st or {}).get("coverage") or 0), "name": ((st or {}).get("custom_name") or t["name"])})
     return out
 
 
@@ -224,18 +229,26 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
         pass
     rest = max(0, avail - spent)
 
-    need_learn = [t for t in topics if (key, "learn", t["code"], 0) not in resolved]
-    need_prac = [t for t in topics if (key, "practice", t["code"], 0) not in resolved]
+    # Coverage decides which stages a topic still needs: 0-1 learn, 0-2 practise, 3 reviews only, 4 one maintenance review.
+    need_learn = [t for t in topics if t["coverage"] <= 1 and (key, "learn", t["code"], 0) not in resolved]
+    need_prac = [t for t in topics if t["coverage"] <= 2 and (key, "practice", t["code"], 0) not in resolved]
+
+    def rounds_for(t: dict, rounds: int) -> list[int]:
+        """Review rounds a topic still gets. A secure topic only needs the final, widest-spaced one."""
+        if rounds <= 0:
+            return []
+        picked = [rounds] if t["coverage"] >= 4 else list(range(1, rounds + 1))
+        return [k for k in picked if (key, "review", t["code"], k) not in resolved]
 
     # ── spaced reviews are reserved first: retrieval at growing gaps is the best-evidenced technique we have ──
     max_rev = 3 if weeks >= 8 else (2 if weeks >= 3 else 1)
     n_reviews, rev_len = 0, 20
     if topics and weeks >= 1:
         options = [(c, length) for c in range(max_rev, 0, -1) for length in (20, 15)]
-        pick = next(((c, length) for c, length in options if len(topics) * c * length <= rest * 0.38), None)
-        n_reviews, rev_len = pick if pick else ((1, 15) if len(topics) * 15 <= rest * 0.38 else (0, 20))
+        pick = next(((c, length) for c, length in options if sum(len(rounds_for(t, c)) for t in topics) * length <= rest * 0.38), None)
+        n_reviews, rev_len = pick if pick else ((1, 15) if sum(len(rounds_for(t, 1)) for t in topics) * 15 <= rest * 0.38 else (0, 20))
     gaps = REVIEW_SCHEDULES.get(n_reviews, ())
-    reviews_total = sum(rev_len for t in topics for i in range(1, n_reviews + 1) if (key, "review", t["code"], i) not in resolved)
+    reviews_total = sum(rev_len * len(rounds_for(t, n_reviews)) for t in topics)
     # When per-topic reviews do not fit, review whole units instead: coarser, but the spacing effect is kept.
     unit_reviews: list[tuple[str, str, int, int]] = []  # (unit code, unit name, round, position of the unit's last topic)
     unit_gaps: tuple = ()
@@ -251,7 +264,7 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
 
     # ── content ──
     base_learn = (65 if level == "HL" else 50) * GRADE_FACTOR[cur]
-    ideal = {t["code"]: min(maxcap, base_learn * size_of(t) * CONF_FACTOR.get(t["confidence"] or 3, 1.0)) for t in need_learn}
+    ideal = {t["code"]: min(maxcap, base_learn * size_of(t) * CONF_FACTOR.get(t["confidence"] or 3, 1.0) * (CONSOLIDATE_FACTOR if t["coverage"] == 1 else 1.0)) for t in need_learn}
     content_budget = rest2 * mix[0] / max(1, mix[0] + mix[1])
     learn: dict[str, float] = {}
     tot_ideal = sum(ideal.values())
@@ -307,17 +320,22 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
         f_end = min(0.88, f_end + 0.1)
     drafts: list[Draft] = []
     tips = {"learn": "Read actively: try a few questions first, explain each idea in your own words, and finish with a 5-minute brain dump from memory.",
+            "consolidate": "You have met this in class. Close the notes, brain-dump what you remember, fill the gaps from your notes, then explain the main idea aloud.",
             "practice": "Exam questions on this topic. Mark with the markscheme and log every lost mark in your error log.",
             "practice_cold": "Start with a 5-minute brain dump of the topic, then exam questions. Re-read notes only for what you could not recall. Log every lost mark.",
             "review": "Closed-book retrieval: write everything you remember, check, then re-test the gaps.",
             "mixed": "Mixed questions from different topics. Decide which method each question needs before solving."}
+    # Topics with nothing left to learn or practise start their reviews early, spread over the first quarter of the plan.
+    review_only = [t["code"] for t in topics if t["code"] not in learn and t["code"] not in practice]
+    early = {c: int((j / max(1, len(review_only))) * 0.25 * last) for j, c in enumerate(review_only)}
     for i, t in enumerate(topics):
         code = t["code"]
         tname = f"{code} {t['name']}" if code and not t["name"].startswith(code) else t["name"]
-        ideal_day = int((i / n) * f_end * last)
+        ideal_day = early[code] if code in early else int((i / n) * f_end * last)
         parent: Draft | None = None
         if code in learn:
-            parent = Draft(key, "learn", f"Learn: {tname}", learn[code], ideal_day, tips["learn"], code, {"phase": "content"}, last=last)
+            verb = "Consolidate" if t["coverage"] == 1 else "Learn"
+            parent = Draft(key, "learn", f"{verb}: {tname}", learn[code], ideal_day, tips["consolidate" if t["coverage"] == 1 else "learn"], code, {"phase": "content"}, last=last)
             drafts.append(parent)
         if code in practice:
             pr = Draft(key, "practice", f"Practise: {tname}", practice[code], ideal_day + 1, tips["practice" if parent else "practice_cold"], code, {"phase": "content"}, last=last)
@@ -326,9 +344,7 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
             else:
                 parent = pr
                 drafts.append(pr)
-        for kk in range(1, n_reviews + 1):
-            if (key, "review", code, kk) in resolved:
-                continue
+        for kk in rounds_for(t, n_reviews):
             rv = Draft(key, "review", f"Review: {tname}", rev_len, ideal_day + gaps[kk - 1], tips["review"], code, {"phase": "review", "n": kk}, last=last)
             if parent:
                 parent.children.append((gaps[kk - 1], rv))
@@ -405,12 +421,13 @@ def _subject_drafts(con: sqlite3.Connection, username: str, profile: dict, sub: 
     demand = total(drafts)
     # The least that still makes a sound programme: practice and one review per topic, half the usual content time,
     # two rounds of timed papers and the final reviews. Below about 60% of this the plan is too thin to trust.
-    sound = (len(topics) * (25 + 15) + 0.5 * sum(base_learn * size_of(t) * CONF_FACTOR.get(t["confidence"] or 3, 1.0) for t in topics)
+    sound = (len(need_prac) * 25 + sum(len(rounds_for(t, 1)) for t in topics) * 15
+             + 0.5 * sum(base_learn * size_of(t) * CONF_FACTOR.get(t["confidence"] or 3, 1.0) * (CONSOLIDATE_FACTOR if t["coverage"] == 1 else 1.0) for t in need_learn)
              + (2 * sum(c["minutes"] * 1.5 for c in comps) + 105 if comps else weeks * 45))
     typical = sound
     coverage = round(min(2.0, budget / sound), 2) if sound > 0 else 1.0
     return drafts, {"budget": int(budget), "demand": int(demand), "short": int(max(0, demand - budget)), "papers": sum(sit_count.values()), "reviews": n_reviews, "review_minutes": rev_len,
-                    "split": list(mix), "topics": len(topics), "learn_tasks": len(learn), "practice_only": len(need_learn) - len(learn), "unit_practice": len(unit_practice), "unit_reviews": len(unit_reviews), "mixed": mixed,
+                    "split": list(mix), "topics": len(topics), "covered": sum(1 for t in topics if t["coverage"] >= 3), "learn_tasks": len(learn), "practice_only": len(need_learn) - len(learn), "unit_practice": len(unit_practice), "unit_reviews": len(unit_reviews), "mixed": mixed,
                     "typical": int(typical), "coverage": coverage}
 
 

@@ -292,3 +292,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 }
 @media print { .sidebar, .tabbar, .topbar, .toasts, .btn { display: none !important; } .shell { display: block; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* master checklist */
+select.cov { width: auto; min-height: 32px; padding: 3px 8px; font-weight: 620; font-size: .84rem; }
+select.cov1 { border-color: var(--info); } select.cov2 { border-color: var(--warn); } select.cov3 { border-color: var(--primary); } select.cov4 { border-color: var(--ok); }
+.split i.cov-seg.cov0 { background: var(--border); } .split i.cov-seg.cov1 { background: var(--info); } .split i.cov-seg.cov2 { background: var(--warn); } .split i.cov-seg.cov3 { background: var(--primary); } .split i.cov-seg.cov4 { background: var(--ok); }
+.legend .cov-key::before { background: var(--border); } .legend .cov-key.cov1::before { background: var(--info); } .legend .cov-key.cov2::before { background: var(--warn); } .legend .cov-key.cov3::before { background: var(--primary); } .legend .cov-key.cov4::before { background: var(--ok); }

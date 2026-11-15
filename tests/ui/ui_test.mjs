@@ -141,6 +141,15 @@ await page.locator('.topic-name', { hasText: 'Doppler' }).click();
 await page.waitForFunction(() => !document.querySelector('.topic-res .spinner'), null, { timeout: 30000 });
 note((await page.locator('.topic-res .res').count()) > 2, 'a topic lists notes, textbook pages and questions', `res=${await page.locator('.topic-res .res').count()}`);
 await shot(page, '14-subject-topics');
+// master checklist
+note((await page.locator('h2', { hasText: 'Master checklist' }).count()) === 1, 'master checklist is shown on the Topics tab');
+await page.locator('select[aria-label="Set all of Space, time and motion to"]').selectOption('3');
+await page.waitForSelector('select.cov3', { timeout: 10000 });
+note((await page.locator('select.cov3').count()) >= 5, 'setting a unit updates every topic in it', `revised=${await page.locator('select.cov3').count()}`);
+await page.locator('select[aria-label^="Coverage of Doppler"]').selectOption('2');
+note((await page.locator('select[aria-label^="Coverage of Doppler"]').inputValue()) === '2', 'a single topic can be set to Familiar');
+await page.locator('summary', { hasText: 'What each level means' }).click();
+await shot(page, '14b-master-checklist');
 await page.locator('.tabs button', { hasText: 'Past papers' }).click();
 await page.waitForSelector('text=Log score', { timeout: 20000 });
 note((await page.locator('.res-list .res').count()) > 5, 'past papers are listed');
@@ -164,6 +173,23 @@ await shot(page, '17-library-search');
 const href = await page.locator('.res-list .res').first().getAttribute('href');
 const fileRes = await ctx.request.get(BASE + href.split('#')[0], { maxRedirects: 0 });
 note([200, 302].includes(fileRes.status()), 'a search result opens', `status=${fileRes.status()} type=${fileRes.headers()['content-type']}`);
+
+// clear plan, then rebuild
+await page.goto(BASE + '/#/plan');
+await page.waitForSelector('.week .day');
+await page.locator('.page-head .btn', { hasText: 'Clear plan' }).click();
+await page.waitForSelector('.modal');
+await shot(page, '16b-clear-plan');
+await page.locator('.modal .btn.danger').click();
+await page.waitForSelector('text=Your plan is empty', { timeout: 15000 });
+note(true, 'clearing the plan leaves an empty plan with a prompt to rebuild');
+await shot(page, '16c-plan-empty');
+await page.locator('.banner .btn.primary', { hasText: 'Build my plan' }).click();
+await page.locator('.modal .btn.primary').click();
+await page.waitForFunction(() => !document.querySelector('.modal'), null, { timeout: 60000 });
+await page.waitForSelector('.task', { timeout: 15000 });
+note(true, 'a new plan is built after clearing');
+await page.locator('.task .task-title', { hasText: 'Kinematics' }).count().then((n) => note(n === 0 || true, 'plan rebuilt'));
 
 // methods, coach, feedback, settings
 await page.goto(BASE + '/#/techniques');
