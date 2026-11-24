@@ -1,8 +1,7 @@
-# IB God — study planner for the n-ved.com home server. (No AI model: the coach and feedback writer were removed.)
+# IB God — study planner for IB Diploma students.
 #
-# Runs as its own compose project so the existing `fileserver` stack is never rebuilt or restarted by it.
-# The only link to that stack is the shared `fileserver_apps` network, where Caddy (after Authelia has
-# verified the user) proxies ibgod.n-ved.com to `ibgod:8080`. Nothing publishes a host port.
+# This example is intended to run behind a reverse proxy and an authentication service.
+# Nothing publishes a host port by default.
 #
 #   docker compose up -d --build        start / update
 #   docker compose logs -f ibgod        follow the app log
@@ -30,21 +29,34 @@ services:
     tmpfs:
       - /tmp:size=256m,mode=1777
     environment:
-      TZ: Europe/Stockholm
+      TZ: ${TZ:-UTC}
       IBGOD_LIBRARY_ROOT: /library
       IBGOD_DATA_DIR: /data
-      IBGOD_TRUSTED_PROXY_HOSTS: caddy
-      IBGOD_PUBLIC_HOSTS: ibgod.n-ved.com
-      IBGOD_ADMIN_GROUPS: lldap_admin
-      IBGOD_ADMIN_USERS: admin
-      IBGOD_EXCLUDE_TOP: "lost+found,Shaffy"   # top-level folders that are never indexed or served
-      IBGOD_INDEX_WORKERS: "2"
+      IBGOD_TRUSTED_PROXY_HOSTS: ${IBGOD_TRUSTED_PROXY_HOSTS:-caddy}
+      IBGOD_PUBLIC_HOSTS: "${IBGOD_PUBLIC_HOSTS:-}"
+      IBGOD_ADMIN_GROUPS: "${IBGOD_ADMIN_GROUPS:-}"
+      IBGOD_ADMIN_USERS: "${IBGOD_ADMIN_USERS:-admin}"
+      IBGOD_EXCLUDE_TOP: "${IBGOD_EXCLUDE_TOP:-lost+found}"
+      IBGOD_INDEX_WORKERS: "${IBGOD_INDEX_WORKERS:-2}"
+      IBGOD_VIEW_BASE: "${IBGOD_VIEW_BASE:-}"
+      IBGOD_DOCS_BASE: "${IBGOD_DOCS_BASE:-}"
+      IBGOD_LOGOUT_URL: "${IBGOD_LOGOUT_URL:-/logout}"
     volumes:
       # never let Docker create an empty folder on the system disk if the data drive is missing
-      - {type: bind, source: /mnt/files/docs, target: /library, read_only: true, bind: {create_host_path: false}}
-      - ./data:/data
+      - type: bind
+        source: "${IBGOD_LIBRARY_PATH:-./library}"
+        target: /library
+        read_only: true
+        bind:
+          create_host_path: false
+      - ${IBGOD_DATA_PATH:-./data}:/data
       # FileBrowser's database and config, read-only: its users, groups and access rules decide what each person sees here
-      - {type: bind, source: /opt/fileserver/filebrowser-data, target: /filebrowser, read_only: true, bind: {create_host_path: false}}
+      - type: bind
+        source: "${IBGOD_FILEBROWSER_DATA_PATH:-./filebrowser-data}"
+        target: /filebrowser
+        read_only: true
+        bind:
+          create_host_path: false
     networks: [apps]
     mem_limit: 3g
     cpus: 3.0
@@ -58,5 +70,5 @@ services:
 
 networks:
   apps:
-    external: true
-    name: fileserver_apps        # existing network of the fileserver stack (internal: caddy <-> apps, no egress)
+    external: ${IBGOD_EXTERNAL_NETWORK:-false}
+    name: ${IBGOD_NETWORK_NAME:-ibgod}

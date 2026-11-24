@@ -15,19 +15,19 @@ DB_PATH = DATA_DIR / "ibgod.db"
 WEB_DIR = Path(os.environ.get("IBGOD_WEB_DIR", str(Path(__file__).resolve().parent.parent / "web"))).resolve()
 
 # Top-level folders of the library that are never indexed or served.
-EXCLUDE_TOP = set(_list("IBGOD_EXCLUDE_TOP", "lost+found,Shaffy"))
+EXCLUDE_TOP = set(_list("IBGOD_EXCLUDE_TOP", "lost+found"))
 
 # Folders that the existing `view` site serves as rendered HTML (scripts must never run on our origin).
-VIEW_BASE = os.environ.get("IBGOD_VIEW_BASE", "https://view.n-ved.com").rstrip("/")
+VIEW_BASE = os.environ.get("IBGOD_VIEW_BASE", "").rstrip("/")
 VIEW_FOLDERS = _list("IBGOD_VIEW_FOLDERS", "IB QUESTIONBANKS,ThinkIB,StudyIB,IB PAST PAPERS - YEAR,IB OFFICIAL EE EXEMPLARS")
-DOCS_BASE = os.environ.get("IBGOD_DOCS_BASE", "https://docs.n-ved.com/files/docs").rstrip("/")
+DOCS_BASE = os.environ.get("IBGOD_DOCS_BASE", "").rstrip("/")
 
 # Identity: only the reverse proxy may set Remote-* headers. We accept them solely from its address.
 TRUSTED_PROXY_HOSTS = _list("IBGOD_TRUSTED_PROXY_HOSTS", "caddy")
-ADMIN_GROUPS = set(_list("IBGOD_ADMIN_GROUPS", "lldap_admin"))
+ADMIN_GROUPS = set(_list("IBGOD_ADMIN_GROUPS", ""))
 ADMIN_USERS = set(_list("IBGOD_ADMIN_USERS", "admin"))
-LOGOUT_URL = os.environ.get("IBGOD_LOGOUT_URL", "https://auth.n-ved.com/logout")
-PUBLIC_HOSTS = set(_list("IBGOD_PUBLIC_HOSTS", "ibgod.n-ved.com"))
+LOGOUT_URL = os.environ.get("IBGOD_LOGOUT_URL", "/logout")
+PUBLIC_HOSTS = set(_list("IBGOD_PUBLIC_HOSTS", ""))
 # Development only: a fixed user when no proxy is present. Never set in the deployed container.
 DEV_USER = os.environ.get("IBGOD_DEV_USER", "")
 

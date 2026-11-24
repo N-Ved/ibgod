@@ -53,7 +53,7 @@ def public(r: dict) -> dict:
 
 
 def external_url(r: dict) -> str | None:
-    if r["url_kind"] == "view":
+    if r["url_kind"] == "view" and config.VIEW_BASE:
         top = r["path"].split("/", 1)[0]
         if top in config.VIEW_FOLDERS:
             return f"{config.VIEW_BASE}/{quote(r['path'])}"
