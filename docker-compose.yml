@@ -33,14 +33,14 @@ services:
       IBGOD_LIBRARY_ROOT: /library
       IBGOD_DATA_DIR: /data
       IBGOD_TRUSTED_PROXY_HOSTS: ${IBGOD_TRUSTED_PROXY_HOSTS:-caddy}
-      IBGOD_PUBLIC_HOSTS: ${IBGOD_PUBLIC_HOSTS:-}
-      IBGOD_ADMIN_GROUPS: ${IBGOD_ADMIN_GROUPS:-}
-      IBGOD_ADMIN_USERS: ${IBGOD_ADMIN_USERS:-admin}
-      IBGOD_EXCLUDE_TOP: ${IBGOD_EXCLUDE_TOP:-lost+found}
-      IBGOD_INDEX_WORKERS: ${IBGOD_INDEX_WORKERS:-2}
-      IBGOD_VIEW_BASE: ${IBGOD_VIEW_BASE:-}
-      IBGOD_DOCS_BASE: ${IBGOD_DOCS_BASE:-}
-      IBGOD_LOGOUT_URL: ${IBGOD_LOGOUT_URL:-/logout}
+      IBGOD_PUBLIC_HOSTS: "${IBGOD_PUBLIC_HOSTS:-}"
+      IBGOD_ADMIN_GROUPS: "${IBGOD_ADMIN_GROUPS:-}"
+      IBGOD_ADMIN_USERS: "${IBGOD_ADMIN_USERS:-admin}"
+      IBGOD_EXCLUDE_TOP: "${IBGOD_EXCLUDE_TOP:-lost+found}"
+      IBGOD_INDEX_WORKERS: "${IBGOD_INDEX_WORKERS:-2}"
+      IBGOD_VIEW_BASE: "${IBGOD_VIEW_BASE:-}"
+      IBGOD_DOCS_BASE: "${IBGOD_DOCS_BASE:-}"
+      IBGOD_LOGOUT_URL: "${IBGOD_LOGOUT_URL:-/logout}"
     volumes:
       # never let Docker create an empty folder on the system disk if the data drive is missing
       - type: bind

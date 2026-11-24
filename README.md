@@ -35,7 +35,8 @@ IB God is a study planner for IB Diploma students that sits on top of a material
 subjects, levels, current and target grades, textbooks and available time; the app builds a study plan to exam
 day, links every session to the right notes, textbook pages, question-bank sections, videos and past papers on
 the drive, checks every change to the schedule for problems, and can be re-planned at any time.
-It has no AI features (an earlier coach and feedback writer were removed). Everything runs on this server.
+It has no AI features (an earlier coach and feedback writer were removed). Everything runs in your self-hosted
+instance.
 
 ## Reference deployment
 
@@ -59,7 +60,7 @@ Internet -> reverse proxy -> authentication (2FA) -> ibgod:8080
 ```bash
 cd /path/to/ibgod
 docker compose up -d --build      # start, or apply an update to the code
-docker compose ps                 # both should be "healthy"
+docker compose ps                 # ibgod should be "healthy"
 docker compose logs -f ibgod      # app log
 docker compose down               # stop (data is kept)
 ```
@@ -138,8 +139,9 @@ the works list but not the files themselves: back up `data/works/` along with `d
 
 `#/apps` shows a card for each configured companion service (`app/apps.json`). A card
 is shown only if the person can actually open it: IB God asks Caddy for a small file on that site using the person's own
-Authelia session, so the answer follows Authelia's live access_control rules (for example User admin only appears for
-`lldap_admin`). The Files card is also hidden without FileBrowser view permission. Results are cached for 5 minutes.
+Authelia session, so the answer follows Authelia's live access_control rules (for example an administrator-only
+service can be restricted by group). The Files card is also hidden without FileBrowser view permission. Results
+are cached for 5 minutes.
 To add a service, add an entry to `app/apps.json` and rebuild.
 
 ## The planner in brief

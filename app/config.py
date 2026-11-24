@@ -24,7 +24,7 @@ DOCS_BASE = os.environ.get("IBGOD_DOCS_BASE", "").rstrip("/")
 
 # Identity: only the reverse proxy may set Remote-* headers. We accept them solely from its address.
 TRUSTED_PROXY_HOSTS = _list("IBGOD_TRUSTED_PROXY_HOSTS", "caddy")
-ADMIN_GROUPS = set(_list("IBGOD_ADMIN_GROUPS", "lldap_admin"))
+ADMIN_GROUPS = set(_list("IBGOD_ADMIN_GROUPS", ""))
 ADMIN_USERS = set(_list("IBGOD_ADMIN_USERS", "admin"))
 LOGOUT_URL = os.environ.get("IBGOD_LOGOUT_URL", "/logout")
 PUBLIC_HOSTS = set(_list("IBGOD_PUBLIC_HOSTS", ""))
