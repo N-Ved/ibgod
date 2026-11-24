@@ -5,7 +5,7 @@ from client import *
 s, me = get("/api/me"); print("me", s, me["username"], "onboarded", me["onboarded"], "llm", me["llm"], "index", me["index"])
 # CSRF checks
 s, r = call("POST", "/api/plan/replan", {"keep_pinned": True}, headers={"X-IBGod": None}); print("no marker ->", s, r)
-s, r = call("POST", "/api/plan/replan", {"keep_pinned": True}, headers={"Origin": "https://view.n-ved.com"}); print("foreign origin ->", s, r)
+s, r = call("POST", "/api/plan/replan", {"keep_pinned": True}, headers={"Origin": "https://example.invalid"}); print("foreign origin ->", s, r)
 s, r = call("POST", "/api/plan/replan", {"keep_pinned": True}, headers={"Sec-Fetch-Site": "same-site"}); print("same-site ->", s, r)
 s, cat = get("/api/catalog"); print("catalog", s, len(cat["subjects"]), "subjects; top by resources:", [(x["short"], x["resources"]) for x in sorted(cat["subjects"], key=lambda x: -x["resources"])[:8]])
 s, tb = get("/api/textbooks?subject=physics&level=HL"); print("physics textbooks", s, len(tb["textbooks"])); [print("   ", t["id"], t["title"][:80], t["syllabus"]) for t in tb["textbooks"][:6]]

@@ -37,7 +37,7 @@ expect(len(before) >= 3 and tsokos, "baseline: physics textbooks visible", (len(
 book_id = tsokos[0]["id"]
 s, h, _ = call("GET", f"/api/files/{book_id}/open", raw=True); expect(s == 200, "baseline: book opens", s)
 
-# 1. deny everyone except admin (same shape as the real /Shaffy/ rule)
+# 1. deny everyone except admin
 rule(HIDE, {"denyAll": True, "Deny": {"Users": {}, "Groups": {}}, "Allow": {"Users": {"admin": {}}, "Groups": {}}})
 wait_reload()
 expect(physics_books_visible() == [], "hidden folder: textbook picker is empty", physics_books_visible()[:2])

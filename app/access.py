@@ -5,8 +5,7 @@ anything changed in FileBrowser (a user's folder scope or view permission, an ac
 FileBrowser groups, `denyByDefault`) applies to the library, search, topic links, past papers and file downloads
 within about half a minute, for everyone. Nothing is configured per user in IB God.
 
-How a decision is made, matching FileBrowser Quantum's behaviour (checked on this server: a rule on /Shaffy/ that
-only allows two users hides the folder and every file in it from everyone else):
+How a decision is made, matching FileBrowser Quantum's behaviour:
   1. The user needs the `view` permission on the source and the file must be inside the user's scope.
      Someone who never opened FileBrowser gets FileBrowser's defaults from config.yaml (it creates them the same way).
   2. Access rules apply to their path and everything below it. The most specific rule that says something about the

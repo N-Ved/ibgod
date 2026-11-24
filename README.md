@@ -1,25 +1,54 @@
 # IB God
 
-A personal study planner for IB Diploma students that sits on top of the material drive (`/mnt/files/docs`).
-Students pick their subjects, levels, current and target grades, textbooks and available time; the app builds a
-study plan to exam day, links every session to the right notes, textbook pages, question-bank sections, videos and
-past papers on the drive, checks every change to the schedule for problems, and can be re-planned at any time.
+> **Open-source status:** IB God is released under the MIT License. This repository contains the application,
+> subject catalogue, browser client, container definition, and test harness. It does not include study-drive
+> content, FileBrowser data, authentication configuration, or any other private deployment data.
+
+IB God is a self-hosted application. The included Compose file is a reference deployment: provide your own
+library, data directory, reverse proxy, authentication, and optional companion services through `.env`. The
+`n-ved.com` deployment details below are an example of one installation, not a requirement.
+
+## Quick start
+
+1. Copy `.env.example` to `.env` and set `IBGOD_LIBRARY_PATH` and `IBGOD_FILEBROWSER_DATA_PATH`.
+2. Create the referenced directories, then start the service:
+
+   ```bash
+   mkdir -p library filebrowser-data data
+   docker compose up -d --build
+   ```
+
+3. Put the service behind an authentication-aware reverse proxy. The app deliberately refuses direct requests
+   unless `IBGOD_DEV_USER` is set for an isolated local test instance.
+
+For local development, use `deploy/dev-up.sh`; it keeps the development port bound to loopback and uses a
+fixed test identity. See [CONTRIBUTING.md](CONTRIBUTING.md) for the test workflow.
+
+## Configuration
+
+All deployment-specific values are environment variables. `.env.example` documents the important settings,
+including the trusted proxy, public hosts used for same-origin checks, administrator identities, optional
+document links, and the Compose network. `app/apps.json` is intentionally empty in the open-source distribution;
+set `IBGOD_APPS_FILE` to a JSON catalogue if your deployment has companion services.
+
+IB God is a study planner for IB Diploma students that sits on top of a material drive. Students pick their
+subjects, levels, current and target grades, textbooks and available time; the app builds a study plan to exam
+day, links every session to the right notes, textbook pages, question-bank sections, videos and past papers on
+the drive, checks every change to the schedule for problems, and can be re-planned at any time.
 It has no AI features (an earlier coach and feedback writer were removed). Everything runs on this server.
 
-## How it fits into the server
+## Reference deployment
 
 ```
-Internet -> Cloudflare tunnel -> Caddy -> Authelia (2FA) -> ibgod:8080
-                                                              |-- /mnt/files/docs (read-only)
-                                                              '-- /opt/fileserver/filebrowser-data (read-only: FileBrowser's access rules)
+Internet -> reverse proxy -> authentication (2FA) -> ibgod:8080
+                                                       |-- library (read-only)
+                                                       '-- FileBrowser data (read-only, optional)
 ```
 
-- Separate compose project in this folder. It never rebuilds or restarts the `fileserver` stack.
-- `ibgod` joins the existing `fileserver_apps` network so Caddy can reach it. No host port is published.
-- Sign-in is Authelia's. Caddy passes the verified user in `Remote-User`; the app accepts that header **only when the
-  connection comes from Caddy's address**, so no other container can impersonate a user. A new Authelia user who
-  opens the site is taken straight to the setup page. Members of `lldap_admin` (and the user `admin`) see a server
-  panel in Settings.
+- The Compose project does not publish a host port by default.
+- Set `IBGOD_EXTERNAL_NETWORK=true` and `IBGOD_NETWORK_NAME` when the reverse proxy runs in another Compose project.
+- The proxy passes the verified user in `Remote-User`; the app accepts that header **only when the connection comes
+  from a configured trusted proxy**, so another container cannot impersonate a user.
 
 | Container   | Image                              | Purpose                                              |
 |-------------|------------------------------------|------------------------------------------------------|
@@ -28,35 +57,33 @@ Internet -> Cloudflare tunnel -> Caddy -> Authelia (2FA) -> ibgod:8080
 ## Everyday commands
 
 ```bash
-cd /home/student/projects/ibgod
+cd /path/to/ibgod
 docker compose up -d --build      # start, or apply an update to the code
 docker compose ps                 # both should be "healthy"
 docker compose logs -f ibgod      # app log
 docker compose down               # stop (data is kept)
 ```
 
-## Going live (already-running fileserver stack)
+## Going live behind Caddy and Authelia
 
-`deploy/go-live.sh` adds one site block to the Caddyfile (graceful reload, no downtime) and adds `ibgod.n-ved.com`
-to Authelia's two-factor rule (Authelia restarts, so everyone signs in again once). It backs both files up to
-`/opt/backups/ibgod-golive-<time>/`, validates each new file before using it, and checks afterwards that the existing
-sites answer exactly as before and that a forged identity header is still stopped.
+`deploy/go-live.sh` is a deployment-specific example for the original installation. Adapt its paths, hostname,
+network name, and authentication rules before using it elsewhere. The important invariant is that the app must
+remain behind authentication and must only trust identity headers from the reverse proxy.
 
 ```bash
-sudo sh deploy/go-live.sh            # apply
-sudo sh deploy/go-live.sh rollback   # undo
+sudo sh deploy/go-live.sh            # adapt before applying
+sudo sh deploy/go-live.sh rollback   # restore the saved configuration
 ```
 
-One step is done in the Cloudflare dashboard, because the tunnel is managed there:
-**Zero Trust -> Networks -> Tunnels -> (your tunnel) -> Public Hostname -> Add a public hostname**:
-subdomain `ibgod`, domain `n-ved.com`, service `HTTP`, URL `caddy:80`.
+If using a tunnel, add the application hostname and point it at the reverse proxy according to your provider's
+documentation.
 
 ## Data
 
 | What                          | Where                                   | Notes                                              |
 |-------------------------------|-----------------------------------------|----------------------------------------------------|
 | Student plans, grades, chats, drafts and the library index | `data/ibgod.db` (SQLite, ~3 GB) | owner-only permissions. Back this file up. |
-| Study material                | `/mnt/files/docs`                       | mounted read-only; the app cannot change it        |
+| Study material                | `IBGOD_LIBRARY_PATH`                    | mounted read-only; the app cannot change it        |
 
 The app writes a small daily snapshot of everything students created (not the index) to `data/backups/students-YYYYMMDD.sqlite`
 and keeps the newest 14. They are on the same disk as the database, so copy that folder somewhere else now and then.
@@ -70,11 +97,10 @@ The library index is derived data: if the database is lost, students' plans are 
   markscheme, syllabus version, language) and extracts searchable text page by page. Admins can trigger a rescan in
   Settings.
 - Only study material is indexed (about 52,000 of 177,000 files; site assets and individual question pages are skipped).
-- Never indexed or served: top-level folders listed in `IBGOD_EXCLUDE_TOP` (default `lost+found,Shaffy`). Under `home/`
-  only `SaveMyExams - Notes` is indexed.
+- Never indexed or served: top-level folders listed in `IBGOD_EXCLUDE_TOP` (default `lost+found`).
 - **FileBrowser's access rules apply here too**, read live from FileBrowser's own database (see "Who can see what").
-- Offline HTML sites (question banks, InThinking, StudyIB) are never rendered on the app's own address; links go to
-  `view.n-ved.com`, which already serves them.
+- Offline HTML sites can be linked to an optional separately hosted viewer configured with `IBGOD_VIEW_BASE`; they are
+  never rendered on the app's own address.
 - Old-syllabus papers, books and notes are kept but labelled, and the planner prefers current-syllabus papers.
 
 ## Who can see what
@@ -110,7 +136,7 @@ the works list but not the files themselves: back up `data/works/` along with `d
 
 ## Apps page
 
-`#/apps` shows a card for each service on the server (`app/apps.json`; view.n-ved.com is deliberately left out). A card
+`#/apps` shows a card for each configured companion service (`app/apps.json`). A card
 is shown only if the person can actually open it: IB God asks Caddy for a small file on that site using the person's own
 Authelia session, so the answer follows Authelia's live access_control rules (for example User admin only appears for
 `lldap_admin`). The Files card is also hidden without FileBrowser view permission. Results are cached for 5 minutes.
@@ -142,11 +168,11 @@ To add a service, add an entry to `app/apps.json` and rebuild.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `IBGOD_EXCLUDE_TOP` | `lost+found,Shaffy` | top-level folders never indexed or served |
-| `IBGOD_ADMIN_GROUPS` / `IBGOD_ADMIN_USERS` | `lldap_admin` / `admin` | who sees the server panel |
+| `IBGOD_EXCLUDE_TOP` | `lost+found` | top-level folders never indexed or served |
+| `IBGOD_ADMIN_GROUPS` / `IBGOD_ADMIN_USERS` | empty / `admin` | who sees the server panel |
 | `IBGOD_INDEX_WORKERS` | `2` | parallel text extraction (low priority) |
 | `IBGOD_FB_SOURCE` | `/srv/docs` | FileBrowser's name for the folder mounted here as the library |
-| `TZ` | `Europe/Stockholm` | what "today" means |
+| `TZ` | `UTC` in Compose | what "today" means |
 
 `IBGOD_DEV_USER` exists for the isolated test copy only (`deploy/dev-up.sh`). The app refuses to start with it set on
 a network where Caddy is reachable.
@@ -154,8 +180,8 @@ a network where Caddy is reachable.
 ## Security summary
 
 - No published ports; reachable only through Caddy after Authelia. Identity headers are trusted only from Caddy.
-- Requests that change anything need a custom header and same-origin checks (plus Caddy's `same_origin_only`), so pages
-  on sibling sites such as `view.n-ved.com` cannot act on a student's behalf.
+- Requests that change anything need a custom header and same-origin checks, so sibling sites cannot act on a
+  student's behalf.
 - Strict Content-Security-Policy (no inline or third-party scripts; the one UI library is vendored:
   `web/vendor/preact-htm.js`, htm 3.1.1 + Preact, sha256 `72284e8e9079c87817145df1110f74e8a2aa040b2fc384922e18dfcb46fc1fd7`).
 - Files are addressed by index id, never by path; HTML from the drive is never rendered on this origin.
@@ -185,7 +211,4 @@ deploy/dev-up.sh down
 sudo sh deploy/go-live.sh rollback       # take it out of Caddy and Authelia
 docker compose down                      # stop the containers
 ```
-Then delete the Cloudflare public hostname and, if wanted, this folder.
-
-Note for the fileserver stack: `ibgod` is attached to its `fileserver_apps` network. `docker compose down` in `/opt/fileserver`
-will therefore report that this one network is still in use; that is harmless (stop IB God first if you want it removed).
+Then remove the public hostname from your proxy or tunnel and, if wanted, this folder.
